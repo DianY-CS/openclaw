@@ -15,6 +15,7 @@ services:
       # Without this override, a macOS host path like /Users/<you>/.openclaw/...
       # imported from .env caused first-reply `mkdir '/Users'` EACCES failures
       # in Linux Docker (#77436).
+      OPENCLAW_LOG_LEVEL: debug
       OPENCLAW_STATE_DIR: /home/node/.openclaw
       OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
       OPENCLAW_CONFIG_DIR: /home/node/.openclaw
@@ -37,9 +38,13 @@ services:
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+      OPENCLAW_STARTUP_ALERT_TELEGRAM_CHAT: ${OPENCLAW_STARTUP_ALERT_TELEGRAM_CHAT:-}
       TZ: ${OPENCLAW_TZ:-UTC}
+      OPENCLAW_TELEGRAM_DNS_RESULT_ORDER: ipv4first
+      OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY: 1
     volumes:
-      - ${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw
+      - openclaw-state:/home/node/.openclaw
+      - openclaw-codex-home:/home/node/.openclaw/agents/main/agent/codex-home
       - ${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace
       - ${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-${HOME:-/tmp}/.openclaw-auth-profile-secrets}:/home/node/.config/openclaw
       ## Uncomment the lines below to enable sandbox isolation
@@ -66,15 +71,97 @@ services:
     init: true
     restart: unless-stopped
     command:
-      [
-        "node",
-        "dist/index.js",
-        "gateway",
-        "--bind",
-        "${OPENCLAW_GATEWAY_BIND:-lan}",
-        "--port",
-        "18789",
-      ]
+      - /bin/sh
+      - -lc
+      - |
+        node - <<'NODE'
+        const fs = require("fs");
+        const { spawn } = require("child_process");
+
+        const reasons = [];
+        const plugin = "/home/node/.openclaw/npm/node_modules/@openclaw/codex/dist/index.js";
+        const codexBin = "/home/node/.openclaw/npm/node_modules/@openai/codex/bin/codex.js";
+        const authStore = "/home/node/.openclaw/agents/main/agent/auth-profiles.json";
+
+
+        if (!fs.existsSync(plugin)) reasons.push("OpenClaw Codex plugin is missing");
+        if (!fs.existsSync(codexBin)) reasons.push("OpenAI Codex app-server binary is missing");
+
+
+        try {
+          const store = JSON.parse(fs.readFileSync(authStore, "utf8"));
+          const profiles = Array.isArray(store.profiles)
+            ? store.profiles
+            : Object.values(store.profiles || store || {});
+          const codexProfile = profiles.find((p) => p && p.provider === "openai-codex" && (p.mode === "oauth" || p.type === "oauth" || p.oauthRef));
+          if (!codexProfile) reasons.push("OpenAI Codex OAuth profile is missing");
+          const expiresAt = codexProfile && (codexProfile.expiresAt || codexProfile.expires_at || codexProfile.expiry);
+          if (expiresAt && Number.isFinite(Date.parse(expiresAt)) && Date.parse(expiresAt) <= Date.now()) {
+            reasons.push("OpenAI Codex OAuth profile is expired");
+          }
+        } catch (error) {
+          reasons.push("OpenAI Codex OAuth profile check failed: " + error.message);
+        }
+
+        async function sendAlert(message) {
+          console.error("[startup/codex-check] ALERT: " + message);
+          const token = process.env.TELEGRAM_BOT_TOKEN;
+          const chatId = process.env.OPENCLAW_STARTUP_ALERT_TELEGRAM_CHAT;
+          if (!token || !chatId) return;
+          try {
+            await fetch("https://api.telegram.org/bot" + token + "/sendMessage", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ chat_id: chatId, text: "OpenClaw startup alert: " + message }),
+            });
+          } catch (error) {
+            console.error("[startup/codex-check] Telegram alert failed: " + error.message);
+          }
+        }
+
+        async function probeCodexAppServer() {
+          if (reasons.length || !fs.existsSync(codexBin)) return;
+          await new Promise((resolve) => {
+            const child = spawn("node", [codexBin, "app-server", "--listen", "stdio://"], {
+              stdio: ["ignore", "ignore", "pipe"],
+              env: process.env,
+            });
+            let stderr = "";
+            const timer = setTimeout(() => {
+              child.kill("SIGTERM");
+              console.log("[startup/codex-check] Codex app-server startup probe ok");
+              resolve();
+            }, 5000);
+            child.stderr.on("data", (chunk) => {
+              stderr += chunk.toString();
+            });
+            child.on("exit", (code, signal) => {
+              clearTimeout(timer);
+              if (code !== null && code !== 0) {
+                reasons.push("OpenAI Codex app-server exited during startup probe: code=" + code + " signal=" + (signal || "none") + " " + stderr.trim());
+              }
+              resolve();
+            });
+            child.on("error", (error) => {
+              clearTimeout(timer);
+              reasons.push("OpenAI Codex app-server startup probe failed: " + error.message);
+              resolve();
+            });
+          });
+        }
+
+        (async () => {
+          await probeCodexAppServer();
+          if (reasons.length) {
+            await sendAlert(reasons.join("; ") + ". Continuing with default qwen model.");
+          } else {
+            console.log("[startup/codex-check] OpenAI/Codex available; qwen remains default.");
+          }
+        })().catch((error) => {
+          console.error("[startup/codex-check] unexpected failure: " + error.message);
+        });
+        NODE
+        exec node dist/index.js gateway --bind "${OPENCLAW_GATEWAY_BIND:-lan}" --port 18789
     healthcheck:
       test:
         [
@@ -87,6 +174,69 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  # searxng:
+  #   image: searxng/searxng:latest
+  #   network_mode: "service:openclaw-gateway"
+  #   depends_on:
+  #     - openclaw-gateway
+  #   environment:
+  #     SEARXNG_BASE_URL: http://127.0.0.1:8080/
+  #   volumes:
+  #     - ./infra/searxng:/etc/searxng
+  #   restart: unless-stopped
+
+  playwright-browser:
+    image: mcr.microsoft.com/playwright:v1.59.1-noble
+    network_mode: "service:openclaw-gateway"
+    depends_on:
+      - openclaw-gateway
+    command:
+      - bash
+      - -lc
+      - |
+        exec /ms-playwright/chromium-1217/chrome-linux64/chrome \
+          --headless \
+          --no-sandbox \
+          --disable-gpu \
+          --disable-dev-shm-usage \
+          --no-first-run \
+          --no-default-browser-check \
+          --user-data-dir=/tmp/chrome-profile \
+          --remote-debugging-address=127.0.0.1 \
+          --remote-debugging-port=9222 \
+          --remote-allow-origins=*
+    restart: unless-stopped
+
+  python-runner:
+    build:
+      context: ./infra/python-runner
+    image: openclaw-python-runner:local
+    network_mode: "service:openclaw-gateway"
+    depends_on:
+      - openclaw-gateway
+      - playwright-browser
+      # - searxng
+    working_dir: /workspace
+    volumes:
+      - ${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/workspace
+      - ${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}/secrets:/run/secrets:ro
+    environment:
+      RESEARCH_ROOT: /workspace/research
+      SEARXNG_URL: http://127.0.0.1:8080
+      PLAYWRIGHT_CDP_URL: http://127.0.0.1:9222
+      RESEARCH_ALLOW_PRIVATE_NETS: "0"
+      PYTHONUNBUFFERED: "1"
+    command:
+      - python
+      - -m
+      - uvicorn
+      - jobs.runner.app:app
+      - --host
+      - 127.0.0.1
+      - --port
+      - "8787"
+    restart: unless-stopped
 
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
@@ -117,7 +267,8 @@ services:
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
       TZ: ${OPENCLAW_TZ:-UTC}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw
+      - openclaw-state:/home/node/.openclaw
+      - openclaw-codex-home:/home/node/.openclaw/agents/main/agent/codex-home
       - ${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace
       - ${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-${HOME:-/tmp}/.openclaw-auth-profile-secrets}:/home/node/.config/openclaw
     stdin_open: true
@@ -126,3 +277,9 @@ services:
     entrypoint: ["node", "dist/index.js"]
     depends_on:
       - openclaw-gateway
+
+volumes:
+  openclaw-state:
+    external: true
+    name: openclaw_openclaw-state
+  openclaw-codex-home:

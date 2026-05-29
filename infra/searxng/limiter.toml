@@ -1,0 +1,3 @@
+# Limiter is disabled in settings.yml for the local OpenClaw research sidecar.
+# This file exists to keep SearXNG from warning about a missing limiter config.
+

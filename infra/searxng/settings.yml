@@ -1,0 +1,32 @@
+use_default_settings:
+  engines:
+    remove:
+      - ahmia
+      - torch
+      - radio browser
+
+general:
+  debug: false
+  instance_name: "OpenClaw Research Search"
+
+search:
+  safe_search: 1
+  autocomplete: ""
+  formats:
+    - html
+    - json
+
+server:
+  secret_key: "openclaw-local-research-change-me"
+  limiter: false
+  image_proxy: false
+  method: "GET"
+
+ui:
+  static_use_hash: true
+
+outgoing:
+  request_timeout: 6.0
+  max_request_timeout: 12.0
+  pool_connections: 50
+  pool_maxsize: 10
