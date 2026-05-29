@@ -155,6 +155,40 @@ describe("agent defaults schema", () => {
     expect(result.experimental?.localModelLean).toBe(true);
   });
 
+  it("accepts embedded Pi tool intent guardrail on defaults and agent entries", () => {
+    const defaults = AgentDefaultsSchema.parse({
+      embeddedPi: {
+        toolIntentGuardrail: {
+          enabled: true,
+          models: ["llamacpp/*qwen*"],
+          retryCount: 2,
+          maxTextChars: 800,
+        },
+      },
+    })!;
+    const agent = AgentEntrySchema.parse({
+      id: "local-qwen",
+      embeddedPi: {
+        toolIntentGuardrail: {
+          enabled: false,
+        },
+      },
+    });
+
+    expect(defaults.embeddedPi?.toolIntentGuardrail?.retryCount).toBe(2);
+    expect(agent.embeddedPi?.toolIntentGuardrail?.enabled).toBe(false);
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({
+        embeddedPi: {
+          toolIntentGuardrail: {
+            retryCount: 6,
+          },
+        },
+      }),
+      "embeddedPi.toolIntentGuardrail.retryCount",
+    );
+  });
+
   it("accepts contextInjection: always", () => {
     const result = AgentDefaultsSchema.parse({ contextInjection: "always" })!;
     expect(result.contextInjection).toBe("always");

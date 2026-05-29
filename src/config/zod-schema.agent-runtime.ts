@@ -70,6 +70,15 @@ export const AgentRunRetriesConfigSchema = z
     { message: "max must be greater than or equal to min", path: ["max"] },
   );
 
+export const EmbeddedPiToolIntentGuardrailSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    models: z.array(z.string().min(1)).optional(),
+    retryCount: z.number().int().min(0).max(5).optional(),
+    maxTextChars: z.number().int().positive().max(4000).optional(),
+  })
+  .strict();
+
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
@@ -1077,6 +1086,7 @@ export const AgentEntrySchema = z
     embeddedPi: z
       .object({
         executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
+        toolIntentGuardrail: EmbeddedPiToolIntentGuardrailSchema.optional(),
       })
       .strict()
       .optional(),

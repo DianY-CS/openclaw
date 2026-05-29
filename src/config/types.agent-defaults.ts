@@ -19,6 +19,17 @@ export type OptionalBootstrapFileName = "SOUL.md" | "USER.md" | "HEARTBEAT.md" |
 export type EmbeddedPiExecutionContract = "default" | "strict-agentic";
 export type SubagentDelegationMode = "suggest" | "prefer";
 
+export type EmbeddedPiToolIntentGuardrailConfig = {
+  /** Enable detection of assistant text that describes tool work without emitting a tool call. */
+  enabled?: boolean;
+  /** Provider/model matchers. Supports "*" wildcards; omitted means every model when enabled. */
+  models?: string[];
+  /** Number of correction retries before surfacing a guardrail error. Default: 1. */
+  retryCount?: number;
+  /** Maximum assistant text length to inspect. Default: 600. */
+  maxTextChars?: number;
+};
+
 export type Gpt5PromptOverlayConfig = {
   /** Friendly interaction-style layer for GPT-5-family models (default: friendly). */
   personality?: "friendly" | "on" | "off";
@@ -323,6 +334,8 @@ export type AgentDefaultsConfig = {
      * - strict-agentic: on OpenAI/OpenAI Codex GPT-5-family runs, keep acting until hitting a real blocker
      */
     executionContract?: EmbeddedPiExecutionContract;
+    /** Optional model-scoped guardrail for missing tool calls after tool-intent text. */
+    toolIntentGuardrail?: EmbeddedPiToolIntentGuardrailConfig;
   };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;

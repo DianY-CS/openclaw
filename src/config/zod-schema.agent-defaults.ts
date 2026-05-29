@@ -10,6 +10,7 @@ import {
   AgentToolModelSchema,
   MemorySearchSchema,
   AgentRunRetriesConfigSchema,
+  EmbeddedPiToolIntentGuardrailSchema,
 } from "./zod-schema.agent-runtime.js";
 import {
   BlockStreamingChunkSchema,
@@ -217,6 +218,7 @@ export const AgentDefaultsSchema = z
           .union([z.literal("trusted"), z.literal("sanitize"), z.literal("ignore")])
           .optional(),
         executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
+        toolIntentGuardrail: EmbeddedPiToolIntentGuardrailSchema.optional(),
       })
       .strict()
       .optional(),

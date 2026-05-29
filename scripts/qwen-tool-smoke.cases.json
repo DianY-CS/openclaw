@@ -1,0 +1,77 @@
+[
+  {
+    "name": "qwen_two_reads",
+    "description": "Qwen should make two read tool calls and combine the results.",
+    "message": "Use tools for this test. First read MEMORY.md from the workspace root. Then read AGENTS.md from the workspace root. After both tool calls complete, answer exactly in this format: MEMORY_TITLE=<first heading from MEMORY.md>; AGENTS_HAS_WORKSPACE_RULES=<yes or no>",
+    "expect": {
+      "status": "ok",
+      "stopReason": "stop",
+      "minToolCalls": 2,
+      "toolsInclude": ["read"],
+      "payloadMustContain": [
+        "MEMORY_TITLE=Long-Term Memory",
+        "AGENTS_HAS_WORKSPACE_RULES=yes"
+      ]
+    }
+  },
+  {
+    "name": "qwen_read_then_exec",
+    "description": "Qwen should chain read and exec before answering.",
+    "message": "Use tools for this test. You must complete both tool calls before answering. First call read on MEMORY.md from the workspace root. Then call exec to run the exact command pwd in the workspace root. Do not use placeholders such as <pwd output>. After both tool calls complete, answer exactly in this format with real observed values: MEMORY_TITLE=<first heading from MEMORY.md>; PWD=<exact pwd stdout>",
+    "expect": {
+      "status": "ok",
+      "stopReason": "stop",
+      "minToolCalls": 2,
+      "toolsInclude": ["read", "exec"],
+      "payloadMustContain": [
+        "MEMORY_TITLE=Long-Term Memory",
+        "PWD=/home/node/.openclaw/workspace"
+      ]
+    }
+  },
+  {
+    "name": "qwen_tool_error_recovery",
+    "description": "Qwen should recover from a failed read by making a second read call.",
+    "message": "Use tools for this test. First try to read definitely_missing_qwen_smoke_file.txt from the workspace root. That read is expected to fail. Then recover by reading MEMORY.md from the workspace root. After both attempts complete, answer exactly in this format: MISSING_FILE_FAILED=<yes or no>; RECOVERED_WITH_MEMORY=<yes or no>; MEMORY_TITLE=<first heading from MEMORY.md>",
+    "expect": {
+      "status": "ok",
+      "stopReason": "stop",
+      "minToolCalls": 2,
+      "toolsInclude": ["read"],
+      "payloadMustContain": [
+        "MISSING_FILE_FAILED=yes",
+        "RECOVERED_WITH_MEMORY=yes",
+        "MEMORY_TITLE=Long-Term Memory"
+      ]
+    }
+  },
+  {
+    "name": "qwen_guardrail_false_positive_quote",
+    "description": "Qwen should not trigger the tool-intent guardrail for quoted explanatory text.",
+    "message": "Do not use any tools for this test. Answer exactly with this single sentence and do not add anything else: The phrase \"I will read MEMORY.md\" is only an example sentence.",
+    "expect": {
+      "status": "ok",
+      "stopReason": "stop",
+      "maxToolCalls": 0,
+      "payloadMustContain": [
+        "The phrase \"I will read MEMORY.md\" is only an example sentence."
+      ],
+      "payloadMustNotContain": [
+        "Tool-intent guardrail"
+      ]
+    }
+  },
+  {
+    "name": "qwen_guardrail_detects_leading_tool_intent",
+    "description": "Qwen should still trip the guardrail for a leading tool-intent statement without a tool call.",
+    "message": "This is a guardrail test. Do not call any tools. Answer exactly with this single sentence and do not add anything else: I will read MEMORY.md.",
+    "expect": {
+      "status": "ok",
+      "stopReason": "error",
+      "maxToolCalls": 0,
+      "payloadMustContain": [
+        "Tool-intent guardrail"
+      ]
+    }
+  }
+]

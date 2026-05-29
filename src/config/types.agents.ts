@@ -2,6 +2,7 @@ import type { ChatType } from "../channels/chat-type.js";
 import type {
   AgentContextLimitsConfig,
   AgentDefaultsConfig,
+  EmbeddedPiToolIntentGuardrailConfig,
   AgentModelEntryConfig,
   EmbeddedPiExecutionContract,
   SubagentDelegationMode,
@@ -150,6 +151,8 @@ export type AgentConfig = {
   embeddedPi?: {
     /** Optional per-agent execution contract override. */
     executionContract?: EmbeddedPiExecutionContract;
+    /** Optional per-agent guardrail override for missing tool calls after tool-intent text. */
+    toolIntentGuardrail?: EmbeddedPiToolIntentGuardrailConfig;
   };
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;

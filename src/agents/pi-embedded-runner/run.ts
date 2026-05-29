@@ -23,6 +23,7 @@ import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import {
+  resolveAgentConfig,
   resolveAgentExecutionContract,
   resolveAgentDir,
   resolveSessionAgentIds,
@@ -346,6 +347,155 @@ function buildTraceToolSummary(params: {
     tools,
     failures: params.hadFailure ? 1 : 0,
   };
+}
+
+const TOOL_INTENT_GUARDRAIL_MESSAGE =
+  "Tool-intent guardrail: model described a tool action but did not emit a tool call.";
+const TOOL_INTENT_RETRY_INSTRUCTION =
+  "Tool-call correction: your previous assistant turn described an action that requires an OpenClaw tool, but no tool call was emitted. Do not describe what you will do. Emit the needed tool call now, or if no tool is actually needed, answer directly without saying you will read/check/run/search/open anything.";
+const DEFAULT_TOOL_INTENT_GUARDRAIL_RETRY_COUNT = 1;
+const DEFAULT_TOOL_INTENT_GUARDRAIL_MAX_TEXT_CHARS = 600;
+const TOOL_INTENT_GUARDRAIL_PATTERNS = [
+  /^\s*(?:[-*]\s*)?(?:\u6211(?:\u73b0\u5728|\u4f1a|\u5c06|\u6765|\u53bb)?|\u8ba9\u6211|\u63a5\u4e0b\u6765|\u9a6c\u4e0a|\u76f4\u63a5|\u5148)\s*(?:\u53bb|\u6765|\u76f4\u63a5)?\s*(?:\u8bfb|\u8bfb\u53d6|\u67e5\u770b|\u68c0\u67e5|\u641c\u7d22|\u67e5\u627e|\u8fd0\u884c|\u6267\u884c|\u8c03\u7528|\u6253\u5f00|\u4fee\u6539|\u5199\u5165|\u521b\u5efa|\u7f16\u8f91|\u5206\u6790|\u786e\u8ba4|\u9a8c\u8bc1)/iu,
+  /^\s*(?:[-*]\s*)?(?:I\s+(?:will|am going to|can|should|need to|now)|Let me|I(?:'|\u2019)ll)\s+(?:read|inspect|check|search|look up|run|execute|call|open|edit|write|create|verify|analy[sz]e)/iu,
+  /^\s*(?:[-*]\s*)?(?:read|exec|write|edit|browser|web_search|web_fetch|process|session_status|shell|terminal)\s*(?:tool|\u5de5\u5177|call|\u8c03\u7528)/iu,
+] as const;
+
+type ToolIntentGuardrailConfig = NonNullable<
+  NonNullable<NonNullable<RunEmbeddedPiAgentParams["config"]>["agents"]>["defaults"]
+>["embeddedPi"] extends infer EmbeddedPi
+  ? EmbeddedPi extends { toolIntentGuardrail?: infer Guardrail }
+    ? Guardrail
+    : never
+  : never;
+
+type ResolvedToolIntentGuardrailConfig = {
+  enabled: boolean;
+  models: string[];
+  retryCount: number;
+  maxTextChars: number;
+};
+
+function clampNonNegativeInteger(value: unknown, fallback: number, max: number): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? Math.min(value, max)
+    : fallback;
+}
+
+function resolveToolIntentGuardrailConfig(
+  cfg: RunEmbeddedPiAgentParams["config"] | undefined,
+  agentId?: string | null,
+): ResolvedToolIntentGuardrailConfig {
+  const defaults = cfg?.agents?.defaults?.embeddedPi?.toolIntentGuardrail;
+  const agentConfig = cfg && agentId ? resolveAgentConfig(cfg, agentId)?.embeddedPi : undefined;
+  const override = agentConfig?.toolIntentGuardrail;
+  const merged: ToolIntentGuardrailConfig = {
+    ...(defaults ?? {}),
+    ...(override ?? {}),
+  };
+  return {
+    enabled: merged.enabled === true,
+    models: Array.isArray(merged.models)
+      ? merged.models.map((entry) => entry.trim()).filter(Boolean)
+      : [],
+    retryCount: clampNonNegativeInteger(
+      merged.retryCount,
+      DEFAULT_TOOL_INTENT_GUARDRAIL_RETRY_COUNT,
+      5,
+    ),
+    maxTextChars: clampNonNegativeInteger(
+      merged.maxTextChars,
+      DEFAULT_TOOL_INTENT_GUARDRAIL_MAX_TEXT_CHARS,
+      4000,
+    ),
+  };
+}
+
+function escapeRegExpLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function matchesModelPattern(pattern: string, provider: unknown, modelId: unknown): boolean {
+  const normalizedPattern = pattern.trim().toLowerCase();
+  if (!normalizedPattern) {
+    return false;
+  }
+  if (normalizedPattern === "*") {
+    return true;
+  }
+  const providerText = String(provider ?? "").toLowerCase();
+  const modelText = String(modelId ?? "").toLowerCase();
+  const refText = providerText ? `${providerText}/${modelText}` : modelText;
+  if (normalizedPattern.includes("*")) {
+    const regex = new RegExp(`^${normalizedPattern.split("*").map(escapeRegExpLiteral).join(".*")}$`);
+    return regex.test(refText) || regex.test(modelText);
+  }
+  return (
+    refText === normalizedPattern ||
+    modelText === normalizedPattern ||
+    providerText === normalizedPattern ||
+    refText.includes(normalizedPattern) ||
+    modelText.includes(normalizedPattern)
+  );
+}
+
+function isToolIntentGuardrailEnabledForModel(params: {
+  config: ResolvedToolIntentGuardrailConfig;
+  provider: unknown;
+  modelId: unknown;
+}): boolean {
+  if (!params.config.enabled) {
+    return false;
+  }
+  if (params.config.models.length === 0) {
+    return true;
+  }
+  return params.config.models.some((pattern) =>
+    matchesModelPattern(pattern, params.provider, params.modelId),
+  );
+}
+
+function looksLikeDeferredToolIntent(text: unknown, maxTextChars: number): boolean {
+  const trimmed = String(text ?? "").trim();
+  if (!trimmed || trimmed.length > maxTextChars) {
+    return false;
+  }
+  return TOOL_INTENT_GUARDRAIL_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+
+function shouldTriggerToolIntentGuardrail(params: {
+  config: ResolvedToolIntentGuardrailConfig;
+  provider: unknown;
+  modelId: unknown;
+  text: unknown;
+  toolMetas?: unknown[];
+  clientToolCalls?: unknown;
+  yieldDetected?: boolean;
+  didSendViaMessagingTool?: boolean;
+  didSendDeterministicApprovalPrompt?: boolean;
+  lastToolError?: unknown;
+}): boolean {
+  if (
+    !isToolIntentGuardrailEnabledForModel({
+      config: params.config,
+      provider: params.provider,
+      modelId: params.modelId,
+    })
+  ) {
+    return false;
+  }
+  if ((params.toolMetas?.length ?? 0) > 0 || params.clientToolCalls) {
+    return false;
+  }
+  if (
+    params.yieldDetected ||
+    params.didSendViaMessagingTool ||
+    params.didSendDeterministicApprovalPrompt ||
+    params.lastToolError
+  ) {
+    return false;
+  }
+  return looksLikeDeferredToolIntent(params.text, params.config.maxTextChars);
 }
 
 /**
@@ -1001,6 +1151,10 @@ export async function runEmbeddedPiAgent(
         params.config,
         sessionAgentId,
       );
+      const toolIntentGuardrailConfig = resolveToolIntentGuardrailConfig(
+        params.config,
+        sessionAgentId,
+      );
       const strictAgenticActive = isStrictAgenticExecutionContractActive({
         config: params.config,
         sessionKey: params.sessionKey,
@@ -1035,6 +1189,7 @@ export async function runEmbeddedPiAgent(
       let planningOnlyRetryAttempts = 0;
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
+      let toolIntentGuardrailRetryAttempts = 0;
       let compactionContinuationRetryAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
       // Cost-runaway breaker for #76293. State lives at the run-loop level
@@ -1070,6 +1225,7 @@ export async function runEmbeddedPiAgent(
       let planningOnlyRetryInstruction: string | null = null;
       let reasoningOnlyRetryInstruction: string | null = null;
       let emptyResponseRetryInstruction: string | null = null;
+      let toolIntentGuardrailRetryInstruction: string | null = null;
       let compactionContinuationRetryInstruction: string | null = null;
       let nextAttemptPromptOverride: string | null = null;
       const ackExecutionFastPathInstruction = resolveAckExecutionFastPathInstruction({
@@ -1331,6 +1487,7 @@ export async function runEmbeddedPiAgent(
             planningOnlyRetryInstruction,
             reasoningOnlyRetryInstruction,
             emptyResponseRetryInstruction,
+            toolIntentGuardrailRetryInstruction,
             compactionContinuationRetryInstruction,
           ].filter(
             (value): value is string => typeof value === "string" && value.trim().length > 0,
@@ -3256,6 +3413,118 @@ export async function runEmbeddedPiAgent(
             : attempt.yieldDetected
               ? "end_turn"
               : (sessionLastAssistant?.stopReason as string | undefined);
+          const toolIntentGuardrailText = (
+            finalAssistantVisibleText ?? finalAssistantRawText
+          )?.trim();
+          if (
+            shouldTriggerToolIntentGuardrail({
+              config: toolIntentGuardrailConfig,
+              provider: reportedModelRef.provider,
+              modelId: reportedModelRef.model,
+              text: toolIntentGuardrailText,
+              toolMetas: attempt.toolMetas,
+              clientToolCalls: attempt.clientToolCalls,
+              yieldDetected: attempt.yieldDetected,
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              lastToolError: attempt.lastToolError,
+            })
+          ) {
+            if (toolIntentGuardrailRetryAttempts < toolIntentGuardrailConfig.retryCount) {
+              toolIntentGuardrailRetryAttempts += 1;
+              toolIntentGuardrailRetryInstruction = TOOL_INTENT_RETRY_INSTRUCTION;
+              log.warn(
+                `tool-intent guardrail detected assistant text without tool call: runId=${params.runId} sessionId=${params.sessionId} provider=${reportedModelRef.provider}/${reportedModelRef.model} — retrying ${toolIntentGuardrailRetryAttempts}/${toolIntentGuardrailConfig.retryCount} with tool-call correction`,
+              );
+              continue;
+            }
+            log.warn(
+              `tool-intent guardrail detected assistant text without tool call: runId=${params.runId} sessionId=${params.sessionId} provider=${reportedModelRef.provider}/${reportedModelRef.model}`,
+            );
+            const guardrailReplayInvalid = resolveReplayInvalidForAttempt(
+              TOOL_INTENT_GUARDRAIL_MESSAGE,
+            );
+            const guardrailLivenessState = resolveRunLivenessState({
+              payloadCount: 0,
+              aborted,
+              timedOut,
+              attempt,
+              incompleteTurnText: TOOL_INTENT_GUARDRAIL_MESSAGE,
+            });
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid: guardrailReplayInvalid,
+              livenessState: guardrailLivenessState,
+              stopReason: "error",
+            });
+            return {
+              payloads: [
+                {
+                  text: TOOL_INTENT_GUARDRAIL_MESSAGE,
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+                finalPromptText: attempt.finalPromptText,
+                finalAssistantVisibleText,
+                finalAssistantRawText,
+                replayInvalid: guardrailReplayInvalid,
+                livenessState: guardrailLivenessState,
+                agentHarnessResultClassification: attempt.agentHarnessResultClassification,
+                stopReason: "error",
+                executionTrace: {
+                  winnerProvider: reportedModelRef.provider,
+                  winnerModel: reportedModelRef.model,
+                  attempts:
+                    traceAttempts.length > 0 ||
+                    sessionLastAssistant?.provider ||
+                    sessionLastAssistant?.model
+                      ? [
+                          ...traceAttempts,
+                          {
+                            provider: reportedModelRef.provider,
+                            model: reportedModelRef.model,
+                            result: "error",
+                            reason: "tool_intent_guardrail",
+                            stage: "assistant",
+                          },
+                        ]
+                      : undefined,
+                  fallbackUsed: traceAttempts.length > 0,
+                  runner: "embedded",
+                },
+                requestShaping: {
+                  ...(lastProfileId ? { authMode: "auth-profile" } : {}),
+                  ...(thinkLevel ? { thinking: thinkLevel } : {}),
+                  ...(params.reasoningLevel ? { reasoning: params.reasoningLevel } : {}),
+                  ...(params.verboseLevel ? { verbose: params.verboseLevel } : {}),
+                  ...(params.blockReplyBreak ? { blockStreaming: params.blockReplyBreak } : {}),
+                },
+                toolSummary: attemptToolSummary,
+                ...(failureSignal ? { failureSignal } : {}),
+                completion: {
+                  stopReason: "error",
+                  finishReason: "error",
+                },
+                contextManagement:
+                  autoCompactionCount > 0
+                    ? { lastTurnCompactions: autoCompactionCount }
+                    : undefined,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
+              heartbeatToolResponse: attempt.heartbeatToolResponse,
+              successfulCronAdds: attempt.successfulCronAdds,
+              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+            };
+          }
           const terminalPayloads = emptyAssistantReplyIsSilent
             ? [{ text: SILENT_REPLY_TOKEN }]
             : payloadsForTerminalPath;
@@ -3398,3 +3667,12 @@ function resolveAuthProfileStateProvider(
   const idProvider = profileId.split(":", 1)[0]?.trim();
   return idProvider || fallbackProvider;
 }
+
+const testing = {
+  looksLikeDeferredToolIntent,
+  matchesModelPattern,
+  resolveToolIntentGuardrailConfig,
+  shouldTriggerToolIntentGuardrail,
+};
+
+export { testing as __testing };
