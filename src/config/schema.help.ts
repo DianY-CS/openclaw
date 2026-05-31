@@ -1513,10 +1513,20 @@ export const FIELD_HELP: Record<string, string> = {
     'How embedded Pi handles workspace-local `.pi/config/settings.json`: "sanitize" (default) strips shellPath/shellCommandPrefix, "ignore" disables project settings entirely, and "trusted" applies project settings as-is.',
   "agents.defaults.embeddedPi.executionContract":
     'Embedded Pi execution contract: "default" keeps the standard runner behavior, while "strict-agentic" keeps OpenAI/OpenAI Codex GPT-5-family runs acting until they hit a real blocker instead of stopping at plans or filler.',
+  "agents.defaults.embeddedPi.toolIntentGuardrail":
+    "Model-scoped guardrail for local/fallback models that describe tool work without emitting an actual tool call. By default it catches tool-call-shaped text, a structured ACTION_INTENT contract, and cheap regex patterns; optionally enable the LLM judge for ambiguous cases.",
+  "agents.defaults.embeddedPi.toolIntentGuardrail.detectors":
+    'Detector order for the tool-intent guardrail. Supported values are "toolCallText", "structuredIntent", "regex", and "llmJudge". Defaults to ["toolCallText","structuredIntent","regex"], or ["toolCallText","structuredIntent","regex","llmJudge"] when judge.enabled is true.',
+  "agents.defaults.embeddedPi.toolIntentGuardrail.judge":
+    "Optional LLM-as-judge classifier for ambiguous assistant text. Disabled by default; when enabled it asks a small completion to return strict JSON before retrying.",
+  "agents.defaults.embeddedPi.toolIntentGuardrail.judge.model":
+    "Optional model ref used by the LLM judge. Omit to use the current agent's default model.",
   "agents.list[].embeddedPi":
     "Optional per-agent embedded Pi overrides. Use this to opt specific agents into stricter GPT-5 execution behavior without changing the global default.",
   "agents.list[].embeddedPi.executionContract":
     'Optional per-agent embedded Pi execution contract override. Set "strict-agentic" to keep that agent acting through plan-only turns on OpenAI/OpenAI Codex GPT-5-family runs, or "default" to inherit the standard runner behavior.',
+  "agents.list[].embeddedPi.toolIntentGuardrail":
+    "Optional per-agent override for missing-tool-call guardrail settings, including detector order and LLM judge configuration.",
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
   "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",

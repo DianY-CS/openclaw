@@ -730,6 +730,8 @@ export function buildAgentSystemPrompt(params: {
   };
   includeMemorySection?: boolean;
   memoryCitationsMode?: MemoryCitationsMode;
+  /** Include the structured fallback template that guardrails can detect. */
+  toolIntentTemplateGuidance?: boolean;
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const acpEnabled = params.acpEnabled === true;
@@ -949,6 +951,18 @@ export function buildAgentSystemPrompt(params: {
     readToolName,
   });
   const workspaceNotes = (params.workspaceNotes ?? []).map((note) => note.trim()).filter(Boolean);
+  const toolIntentContractSection = params.toolIntentTemplateGuidance
+    ? [
+        "## Tool Intent Contract",
+        "If your next step requires a tool, call the tool now. Do not only promise it.",
+        "If a tool is required but you cannot emit the call, output exactly:",
+        "ACTION_INTENT",
+        "type: tool_required",
+        "action: <short action>",
+        "reason: <why a tool is needed>",
+        "",
+      ]
+    : [];
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
@@ -1009,6 +1023,7 @@ export function buildAgentSystemPrompt(params: {
     memorySection,
     acpEnabled,
     stableContextFiles,
+    toolIntentTemplateGuidance: params.toolIntentTemplateGuidance === true,
   });
   const stablePrefix = cacheStablePromptPrefix(stablePrefixCacheKey, () => {
     const lines = [
@@ -1085,6 +1100,7 @@ export function buildAgentSystemPrompt(params: {
           "",
         ],
       }),
+      ...toolIntentContractSection,
       ...buildOverridablePromptSection({
         override: providerSectionOverrides.execution_bias,
         fallback: buildExecutionBiasSection({

@@ -24,10 +24,27 @@ export type EmbeddedPiToolIntentGuardrailConfig = {
   enabled?: boolean;
   /** Provider/model matchers. Supports "*" wildcards; omitted means every model when enabled. */
   models?: string[];
+  /** Detector order. Default is ["toolCallText","structuredIntent","regex"], plus "llmJudge" when judge.enabled is true. */
+  detectors?: Array<"toolCallText" | "structuredIntent" | "regex" | "llmJudge">;
   /** Number of correction retries before surfacing a guardrail error. Default: 1. */
   retryCount?: number;
   /** Maximum assistant text length to inspect. Default: 600. */
   maxTextChars?: number;
+  /** Optional LLM classifier for ambiguous tool-intent text. Disabled by default. */
+  judge?: {
+    /** Enable LLM-as-judge classification after cheap structural filters pass. */
+    enabled?: boolean;
+    /** Optional model ref for the judge; omitted uses the current agent's default model. */
+    model?: string;
+    /** Minimum confidence required for the judge to trigger the guardrail. Default: 0.7. */
+    minConfidence?: number;
+    /** Completion timeout in milliseconds. Default: 12000. */
+    timeoutMs?: number;
+    /** Judge completion max tokens. Default: 180. */
+    maxTokens?: number;
+    /** Judge completion temperature. Default: 0. */
+    temperature?: number;
+  };
 };
 
 export type Gpt5PromptOverlayConfig = {

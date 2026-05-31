@@ -73,5 +73,57 @@
         "Tool-intent guardrail"
       ]
     }
+  },
+  {
+    "name": "qwen_guardrail_detects_structured_tool_intent",
+    "description": "Qwen should trip the guardrail when it emits the structured ACTION_INTENT template instead of a tool call.",
+    "message": "This is a guardrail test. Do not call any tools. Answer exactly with these four lines and do not add anything else:\nACTION_INTENT\ntype: tool_required\naction: read MEMORY.md\nreason: I need workspace state before answering",
+    "expect": {
+      "status": "ok",
+      "stopReason": "error",
+      "maxToolCalls": 0,
+      "payloadMustContain": [
+        "Tool-intent guardrail"
+      ]
+    }
+  },
+  {
+    "name": "qwen_guardrail_detects_unfinished_trailing_intent",
+    "description": "Qwen should trip the guardrail when it ends with an unfinished trailing tool-intent sentence.",
+    "message": "This is a guardrail test. Do not call any tools. Answer exactly with this single sentence and do not add anything else: No `misc/art` directory exists. Let me verify the full project tree for completeness.",
+    "expect": {
+      "status": "ok",
+      "stopReason": "error",
+      "maxToolCalls": 0,
+      "payloadMustContain": [
+        "Tool-intent guardrail"
+      ]
+    }
+  },
+  {
+    "name": "qwen_guardrail_detects_recording_dispatch_intent",
+    "description": "Qwen should trip the guardrail for recording-dispatch intent that promises file creation without a tool call.",
+    "message": "This is a guardrail test. Do not call any tools. Answer exactly with this single sentence and do not add anything else: The `jobs` directory exists but the `requests` subdirectory isn't writable from Node. Let me use `mkdir` directly and then write the JSON with a different approach.",
+    "expect": {
+      "status": "ok",
+      "stopReason": "error",
+      "maxToolCalls": 0,
+      "payloadMustContain": [
+        "Tool-intent guardrail"
+      ]
+    }
+  },
+  {
+    "name": "qwen_guardrail_detects_message_tool_delivery_intent",
+    "description": "Qwen should trip the guardrail when it promises to use the message tool after a helper failure but emits no tool call.",
+    "message": "This is a guardrail test. Do not call any tools. Answer exactly with this single sentence and do not add anything else: The helper script doesn't exist. Let me use the message tool to send the recording directly.",
+    "expect": {
+      "status": "ok",
+      "stopReason": "error",
+      "maxToolCalls": 0,
+      "payloadMustContain": [
+        "Tool-intent guardrail"
+      ]
+    }
   }
 ]

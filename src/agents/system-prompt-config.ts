@@ -15,6 +15,7 @@ export type ResolvedAgentSystemPromptConfig = Pick<
   | "ttsHint"
   | "modelAliasLines"
   | "memoryCitationsMode"
+  | "toolIntentTemplateGuidance"
 >;
 
 export type ConfiguredAgentSystemPromptParams = AgentSystemPromptRenderParams & {
@@ -40,7 +41,26 @@ export function resolveAgentSystemPromptConfig(params: {
     ttsHint: config ? buildTtsSystemPromptHint(config, agentId) : undefined,
     modelAliasLines: buildModelAliasLines(config),
     memoryCitationsMode: config?.memory?.citations,
+    toolIntentTemplateGuidance: resolveToolIntentTemplateGuidance(config, agentId),
   };
+}
+
+function resolveToolIntentTemplateGuidance(
+  config: OpenClawConfig | undefined,
+  agentId: string | undefined,
+): boolean {
+  if (!config) {
+    return false;
+  }
+  const defaults = config.agents?.defaults?.embeddedPi?.toolIntentGuardrail;
+  const agentConfig = agentId ? resolveAgentConfig(config, agentId)?.embeddedPi : undefined;
+  const override = agentConfig?.toolIntentGuardrail;
+  const enabled = override?.enabled ?? defaults?.enabled;
+  if (enabled !== true) {
+    return false;
+  }
+  const detectors = override?.detectors ?? defaults?.detectors;
+  return !detectors || detectors.length === 0 || detectors.includes("structuredIntent");
 }
 
 export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPromptParams) {

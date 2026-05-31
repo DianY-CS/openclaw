@@ -161,8 +161,17 @@ describe("agent defaults schema", () => {
         toolIntentGuardrail: {
           enabled: true,
           models: ["llamacpp/*qwen*"],
+          detectors: ["toolCallText", "structuredIntent", "regex", "llmJudge"],
           retryCount: 2,
           maxTextChars: 800,
+          judge: {
+            enabled: true,
+            model: "openai/gpt-4.1-mini",
+            minConfidence: 0.8,
+            timeoutMs: 10_000,
+            maxTokens: 120,
+            temperature: 0,
+          },
         },
       },
     })!;
@@ -176,6 +185,7 @@ describe("agent defaults schema", () => {
     });
 
     expect(defaults.embeddedPi?.toolIntentGuardrail?.retryCount).toBe(2);
+    expect(defaults.embeddedPi?.toolIntentGuardrail?.judge?.model).toBe("openai/gpt-4.1-mini");
     expect(agent.embeddedPi?.toolIntentGuardrail?.enabled).toBe(false);
     expectSchemaFailurePath(
       AgentDefaultsSchema.safeParse({
