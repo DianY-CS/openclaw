@@ -219,6 +219,21 @@ function collectPayloadText(response) {
     .join("\n");
 }
 
+function looksLikeNonAnswerPlaceholder(text) {
+  const trimmed = String(text ?? "").trim();
+  if (!trimmed || trimmed.length > 24) {
+    return false;
+  }
+  const normalized = trimmed.replace(/[\s\u200B-\u200D\uFEFF]/gu, "");
+  return normalized.length > 0 && /^[.…。．.]+$/u.test(normalized);
+}
+
+function looksLikeUnsupportedCompletionClaim(text) {
+  return /(?:^|[.!?。！？]\s*)(?:the\s+)?(?:(?:recording|gameplay|godot|runner|telegram|video|screenshot)\s+)?(?:request|job|file|recording|video|screenshot|message|artifact)\s+(?:has\s+been\s+|was\s+|is\s+)?(?:created|written|dispatched|submitted|queued|sent|delivered|shared|uploaded)\b/iu.test(
+    String(text ?? ""),
+  );
+}
+
 function classifyTurn(turnId, response, processResult) {
   const text = collectPayloadText(response);
   const lower = text.toLowerCase();
@@ -227,14 +242,20 @@ function classifyTurn(turnId, response, processResult) {
   const toolCalls = Number(meta.toolSummary?.calls ?? 0);
   const guardrail =
     lower.includes("tool-intent guardrail") ||
+    lower.includes("non-answer guardrail") ||
     meta.executionTrace?.attempts?.some((attempt) => attempt.reason === "tool_intent_guardrail");
   const timeout = processResult.timedOut === true;
   const statusOk = processResult.code === 0 && response?.status === "ok";
+  const nonAnswer = looksLikeNonAnswerPlaceholder(text);
+  const completionClaimWithoutToolEvidence =
+    toolCalls === 0 && looksLikeUnsupportedCompletionClaim(text);
 
   const checks = {
     statusOk,
     guardrail,
     timeout,
+    nonAnswer,
+    completionClaimWithoutToolEvidence,
     toolCalls,
     tools,
     mentionsProject:
@@ -265,11 +286,17 @@ function classifyTurn(turnId, response, processResult) {
   };
 
   const passByTurn = {
-    discover: checks.statusOk && checks.mentionsProject,
-    plan: checks.statusOk && checks.mentionsRecording && checks.mentionsGodotRunner,
-    execute: checks.statusOk && (toolCalls > 0 || checks.guardrail),
-    debug_prompt: checks.statusOk && (toolCalls > 0 || checks.guardrail || checks.mentionsDebug),
-    conclusion: checks.statusOk && checks.mentionsDebug && checks.deliveredFinalConclusion,
+    discover: checks.statusOk && !checks.nonAnswer && checks.mentionsProject,
+    plan: checks.statusOk && !checks.nonAnswer && checks.mentionsRecording && checks.mentionsGodotRunner,
+    execute:
+      checks.statusOk &&
+      !checks.nonAnswer &&
+      !checks.completionClaimWithoutToolEvidence &&
+      (toolCalls > 0 || checks.guardrail),
+    debug_prompt:
+      checks.statusOk && !checks.nonAnswer && (toolCalls > 0 || checks.guardrail || checks.mentionsDebug),
+    conclusion:
+      checks.statusOk && !checks.nonAnswer && checks.mentionsDebug && checks.deliveredFinalConclusion,
   };
 
   return {

@@ -6,6 +6,9 @@ const {
   evaluateToolIntentGuardrail,
   looksLikeBareToolCallText,
   looksLikeDeferredToolIntent,
+  looksLikeFinalizationRequest,
+  looksLikeNonAnswerPlaceholder,
+  looksLikeUnsupportedToolCompletionClaim,
   looksLikeStructuredToolIntent,
   matchesModelPattern,
   resolveToolIntentGuardrailConfig,
@@ -53,6 +56,35 @@ describe("embedded Pi tool-intent guardrail", () => {
     expect(looksLikeDeferredToolIntent("Let me first check the project structure.", 600)).toBe(
       true,
     );
+    expect(
+      looksLikeDeferredToolIntent(
+        "Now I have the full picture. Let me examine the screenshot and video probe.",
+        600,
+      ),
+    ).toBe(true);
+    expect(looksLikeDeferredToolIntent("Let me find the request validation code.", 600)).toBe(
+      true,
+    );
+    expect(looksLikeDeferredToolIntent("Now let me wait for the runner to pick it up.", 600))
+      .toBe(true);
+    expect(looksLikeDeferredToolIntent("I wrote the request JSON. Let me do that now.", 600))
+      .toBe(true);
+  });
+
+  it("detects user requests that should force finalization recovery", () => {
+    expect(
+      looksLikeFinalizationRequest(
+        "Please continue until you have a concrete debugging conclusion and a suggested fix.",
+        600,
+      ),
+    ).toBe(true);
+    expect(looksLikeFinalizationRequest("Can you summarize the root cause?", 600)).toBe(true);
+    expect(looksLikeFinalizationRequest("那么对于这些问题的修改建议是什么呢？", 600)).toBe(true);
+
+    expect(looksLikeFinalizationRequest("Please execute it.", 600)).toBe(false);
+    expect(looksLikeFinalizationRequest("What will you do? Just tell me your plan.", 600)).toBe(
+      false,
+    );
   });
 
   it("detects structured tool-intent template declarations", () => {
@@ -91,6 +123,58 @@ describe("embedded Pi tool-intent guardrail", () => {
       trigger: true,
       detector: "toolCallText",
     });
+  });
+
+  it("detects placeholder-only non-answers narrowly", () => {
+    expect(looksLikeNonAnswerPlaceholder("...", 600)).toBe(true);
+    expect(looksLikeNonAnswerPlaceholder("…", 600)).toBe(true);
+    expect(looksLikeNonAnswerPlaceholder("。。。", 600)).toBe(true);
+    expect(looksLikeNonAnswerPlaceholder(" . . . ", 600)).toBe(true);
+
+    expect(looksLikeNonAnswerPlaceholder("OK", 600)).toBe(false);
+    expect(looksLikeNonAnswerPlaceholder("Yes, it is there.", 600)).toBe(false);
+    expect(looksLikeNonAnswerPlaceholder("... checking", 600)).toBe(false);
+    expect(looksLikeNonAnswerPlaceholder("The log says ...", 600)).toBe(false);
+  });
+
+  it("detects completion claims that need same-turn tool evidence", async () => {
+    expect(
+      looksLikeUnsupportedToolCompletionClaim(
+        "The recording request has been dispatched to the Windows host runner.",
+        600,
+      ),
+    ).toBe(true);
+    expect(looksLikeUnsupportedToolCompletionClaim("Request created: auto_chess.json", 600)).toBe(
+      true,
+    );
+    expect(
+      looksLikeUnsupportedToolCompletionClaim(
+        "The request will be created under jobs/game/requests.",
+        600,
+      ),
+    ).toBe(false);
+
+    const noEvidence = await evaluateToolIntentGuardrail({
+      config: enabledConfig,
+      provider: "llamacpp",
+      modelId: "Qwen3.6-35B-A3B-APEX-I-Balanced.gguf",
+      text: "The recording request has been dispatched to the Windows host runner.",
+      toolMetas: [],
+    });
+    expect(noEvidence).toMatchObject({
+      trigger: true,
+      detector: "regex",
+      reason: "completion claim without tool evidence",
+    });
+
+    const withEvidence = await evaluateToolIntentGuardrail({
+      config: enabledConfig,
+      provider: "llamacpp",
+      modelId: "Qwen3.6-35B-A3B-APEX-I-Balanced.gguf",
+      text: "The recording request has been dispatched to the Windows host runner.",
+      toolMetas: [{ toolName: "exec" }],
+    });
+    expect(withEvidence.trigger).toBe(false);
   });
 
   it("detects tool-call-shaped text that only appears in thinking", async () => {
@@ -186,6 +270,12 @@ describe("embedded Pi tool-intent guardrail", () => {
     expect(looksLikeDeferredToolIntent("Now let me start the runner in the background:", 600)).toBe(
       true,
     );
+    expect(
+      looksLikeDeferredToolIntent(
+        `${"Known evidence. ".repeat(80)}Now I have a clear picture. Let me check the screenshot from the most recent run to see what the game looks like.`,
+        600,
+      ),
+    ).toBe(true);
   });
 
   it("does not flag quoted or explanatory text as tool intent", () => {

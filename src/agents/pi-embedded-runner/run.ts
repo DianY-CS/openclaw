@@ -353,22 +353,37 @@ function buildTraceToolSummary(params: {
 
 const TOOL_INTENT_GUARDRAIL_MESSAGE =
   "Tool-intent guardrail: model described a tool action but did not emit a tool call.";
+const NON_ANSWER_GUARDRAIL_MESSAGE =
+  "Non-answer guardrail: model produced only an ellipsis or placeholder instead of a usable response.";
 const TOOL_INTENT_RETRY_INSTRUCTION =
   "Tool-call correction: your previous assistant turn described an action that requires an OpenClaw tool, but no tool call was emitted. If the next step requires reading/checking/searching/running/opening/creating/writing/dispatching/verifying/sending anything, your entire next assistant message must be one or more structured tool calls and no prose before or after. Do not say what you will do. Do not write \"let me\", \"I'll\", \"I will\", or similar future-action text. If no tool is actually needed, answer directly and finally without promising any future action.";
 const TOOL_INTENT_FINALIZATION_INSTRUCTION =
-  "Tool-call finalization correction: this turn has already made tool progress. Your previous assistant message again promised more tool work without emitting a tool call. Do not start another investigation loop. Based only on the evidence already in the transcript, produce a concise final answer now. If evidence is incomplete, say exactly what is known, what remains uncertain, and the single recommended next change or test. Do not write \"let me\", \"I'll\", \"I will\", or similar future-action text.";
+  "Tool-call finalization correction: the user is asking for a conclusion, summary, or suggested fix, or this turn has already made tool progress. Your previous assistant message promised more tool work without emitting a tool call. Do not start another investigation loop. Based only on the evidence already in the transcript, produce a concise final answer now. If evidence is incomplete, say exactly what is known, what remains uncertain, and the single recommended next change or test. Do not write \"let me\", \"I'll\", \"I will\", or similar future-action text.";
+const USER_REQUESTS_FINALIZATION_PATTERNS = [
+  /\b(?:conclusion|conclude|summary|summari[sz]e|final\s+(?:answer|result|report)|what\s+happened|what\s+went\s+wrong|root\s+cause|suggested\s+fix|modification\s+suggestion|recommend(?:ation|ed)?|next\s+change)\b/iu,
+  /(?:\u7ed3\u8bba|\u603b\u7ed3|\u6536\u675f|\u6700\u540e|\u539f\u56e0|\u95ee\u9898\u5728\u54ea|\u4fee\u6539\u5efa\u8bae|\u5efa\u8bae|\u65b9\u6848|\u4e0b\u4e00\u6b65)/u,
+] as const;
 const TOOL_CALL_TEXT_RETRY_INSTRUCTION =
   "Tool-call correction: your previous assistant turn printed text that looked like a tool call, but the runtime did not receive a structured tool call. Your entire next assistant message must be one or more actual structured tool calls and no prose before or after. Do not print <tool_call>, JSON tool payloads, or ReAct Action text as prose. Use the available tool interface now, or answer directly and finally if no tool is needed.";
+const NON_ANSWER_RETRY_INSTRUCTION =
+  "Non-answer correction: your previous assistant message contained only an ellipsis or placeholder text. Do not repeat it. If the task requires a tool, emit the required structured tool call now with no prose before or after. If no tool is needed, provide a concise user-visible answer now.";
 const DEFAULT_TOOL_INTENT_GUARDRAIL_RETRY_COUNT = 1;
 const DEFAULT_TOOL_INTENT_GUARDRAIL_MAX_TEXT_CHARS = 600;
 const TOOL_INTENT_GUARDRAIL_PATTERNS = [
   /^\s*(?:[-*]\s*)?(?:\u6211(?:\u73b0\u5728|\u4f1a|\u5c06|\u6765|\u53bb)?|\u8ba9\u6211|\u63a5\u4e0b\u6765|\u9a6c\u4e0a|\u76f4\u63a5|\u5148)\s*(?:\u53bb|\u6765|\u76f4\u63a5)?\s*(?:\u8bfb|\u8bfb\u53d6|\u67e5\u770b|\u68c0\u67e5|\u641c\u7d22|\u67e5\u627e|\u8fd0\u884c|\u6267\u884c|\u8c03\u7528|\u6253\u5f00|\u4fee\u6539|\u5199\u5165|\u521b\u5efa|\u7f16\u8f91|\u5206\u6790|\u786e\u8ba4|\u9a8c\u8bc1)/iu,
-  /^\s*(?:[-*]\s*)?(?:now\s+)?(?:I\s+(?:will|am going to|can|should|need to|now)|Let me|I(?:'|\u2019)ll)\s+(?:also\s+|first\s+|now\s+|next\s+|continue\s+to\s+)?(?:read|inspect|check|re-?check|search|look(?:\s+(?:up|at|into))?|start|restart|run|execute|call|open|edit|write|create|dispatch|verify|analy[sz]e|send|deliver|share|upload)/iu,
+  /^\s*(?:[-*]\s*)?(?:now\s+)?(?:I\s+(?:will|am going to|can|should|need to|now)|Let me|I(?:'|\u2019)ll)\s+(?:also\s+|first\s+|now\s+|next\s+|continue\s+to\s+)?(?:read|inspect|examine|review|find|check|re-?check|search|wait|look(?:\s+(?:up|at|into))?|start|restart|run|execute|call|open|edit|write|create|dispatch|verify|analy[sz]e|send|deliver|share|upload)/iu,
   /^\s*(?:[-*]\s*)?(?:read|exec|write|edit|message|browser|web_search|web_fetch|process|session_status|shell|terminal)\s*(?:tool|\u5de5\u5177|call|\u8c03\u7528)/iu,
-  /(?:^|[.!?\u3002\uff01\uff1f]\s+)(?:now\s+)?(?:Let me|I(?:'|\u2019)ll|I\s+(?:will|should|need to|am going to))\s+(?:also\s+|first\s+|now\s+|next\s+|continue\s+to\s+)?(?:read|inspect|check|re-?check|search|look(?:\s+(?:up|at|into))?|start|restart|run|execute|call|open|edit|write|create|dispatch|verify|analy[sz]e|send|deliver|share|upload)\b[^.!?\u3002\uff01\uff1f]*(?:[.!?\u3002\uff01\uff1f])?\s*$/iu,
+  /(?:^|[.!?\u3002\uff01\uff1f]\s+)(?:now\s+)?(?:Let me|I(?:'|\u2019)ll|I\s+(?:will|should|need to|am going to))\s+(?:also\s+|first\s+|now\s+|next\s+|continue\s+to\s+)?(?:read|inspect|examine|review|find|check|re-?check|search|wait|look(?:\s+(?:up|at|into))?|start|restart|run|execute|call|open|edit|write|create|dispatch|verify|analy[sz]e|send|deliver|share|upload)\b[^.!?\u3002\uff01\uff1f]*(?:[.!?\u3002\uff01\uff1f])?\s*$/iu,
+  /(?:^|[.!?\u3002\uff01\uff1f]\s+)(?:now\s+)?(?:Let me|I(?:'|\u2019)ll|I\s+(?:will|should|need to|am going to))\s+do\s+(?:that|this|it)\s+now(?:[.!?\u3002\uff01\uff1f])?\s*$/iu,
   /(?:^|[.!?\u3002\uff01\uff1f]\s+)(?:now\s+)?(?:Let me|I(?:'|\u2019)ll|I\s+(?:will|should|need to|am going to))\s+use\s+`?[\w.-]+`?(?:\s+tool)?[^.!?\u3002\uff01\uff1f]*\b(?:write|create|dispatch|start|restart|run|execute|call|send|deliver|share|upload)\b[^.!?\u3002\uff01\uff1f]*(?:[.!?\u3002\uff01\uff1f])?\s*$/iu,
   /(?:^|[.!?\u3002\uff01\uff1f]\s+)(?:now\s+)?(?:sending|delivering|sharing|uploading)\b[^.!?\u3002\uff01\uff1f]*(?:recording|video|file|artifact|screenshot|to\s+(?:you|telegram))[^.!?\u3002\uff01\uff1f]*(?:[.!?\u3002\uff01\uff1f])?\s*$/iu,
   /(?:^|[.!?\u3002\uff01\uff1f]\s*)(?:\u6211(?:\u518d|\u7ee7\u7eed|\u63a5\u7740)?|\u8ba9\u6211(?:\u518d|\u7ee7\u7eed)?|\u63a5\u4e0b\u6765)\s*(?:\u53bb|\u6765)?\s*(?:\u8bfb|\u8bfb\u53d6|\u67e5\u770b|\u68c0\u67e5|\u641c\u7d22|\u67e5\u627e|\u8fd0\u884c|\u6267\u884c|\u8c03\u7528|\u6253\u5f00|\u4fee\u6539|\u5199\u5165|\u521b\u5efa|\u7f16\u8f91|\u5206\u6790|\u786e\u8ba4|\u9a8c\u8bc1|\u53d1\u9001|\u5206\u4eab|\u4e0a\u4f20)[^\u3002\uff01\uff1f.!?]*(?:[\u3002\uff01\uff1f.!?])?\s*$/iu,
+] as const;
+const TOOL_COMPLETION_CLAIM_GUARDRAIL_PATTERNS = [
+  /(?:^|[.!?\u3002\uff01\uff1f]\s*)(?:the\s+)?(?:(?:recording|gameplay|godot|runner|telegram|video|screenshot)\s+)?(?:request|job|file|recording|video|screenshot|message|artifact)\s+(?:has\s+been\s+|was\s+|is\s+)?(?:created|written|dispatched|submitted|queued|sent|delivered|shared|uploaded)\b/iu,
+  /(?:^|[.!?\u3002\uff01\uff1f]\s*)(?:created|wrote|written|dispatched|submitted|queued|sent|delivered|shared|uploaded)\s+(?:the\s+)?(?:request|job|file|recording|video|screenshot|message|artifact)\b/iu,
+  /(?:^|[.!?\u3002\uff01\uff1f]\s*)(?:I(?:'|\u2019)?ve|I\s+have)\s+(?:created|written|dispatched|submitted|queued|sent|delivered|shared|uploaded)\b/iu,
+  /(?:^|[.!?\u3002\uff01\uff1f]\s*)(?:\u8bf7\u6c42|\u4efb\u52a1|\u6587\u4ef6|\u5f55\u50cf|\u89c6\u9891|\u622a\u56fe|\u6d88\u606f)\s*(?:\u5df2|\u5df2\u7ecf)?\s*(?:\u521b\u5efa|\u5199\u5165|\u63d0\u4ea4|\u6d3e\u53d1|\u6392\u961f|\u53d1\u9001|\u4ea4\u4ed8|\u5206\u4eab|\u4e0a\u4f20)/iu,
 ] as const;
 
 type ToolIntentGuardrailConfig = NonNullable<
@@ -529,12 +544,35 @@ function isToolIntentGuardrailEnabledForModel(params: {
   );
 }
 
-function looksLikeDeferredToolIntent(text: unknown, maxTextChars: number): boolean {
+function buildGuardrailTextScanCandidates(text: unknown, maxTextChars: number): string[] {
   const trimmed = String(text ?? "").trim();
-  if (!trimmed || trimmed.length > maxTextChars) {
-    return false;
+  if (!trimmed) {
+    return [];
   }
-  return TOOL_INTENT_GUARDRAIL_PATTERNS.some((pattern) => pattern.test(trimmed));
+  return trimmed.length <= maxTextChars
+    ? [trimmed]
+    : [
+        trimmed.slice(0, maxTextChars).trim(),
+        trimmed.slice(Math.max(0, trimmed.length - maxTextChars)).trim(),
+      ].filter(Boolean);
+}
+
+function looksLikeDeferredToolIntent(text: unknown, maxTextChars: number): boolean {
+  return buildGuardrailTextScanCandidates(text, maxTextChars).some((candidate) =>
+    TOOL_INTENT_GUARDRAIL_PATTERNS.some((pattern) => pattern.test(candidate)),
+  );
+}
+
+function looksLikeUnsupportedToolCompletionClaim(text: unknown, maxTextChars: number): boolean {
+  return buildGuardrailTextScanCandidates(text, maxTextChars).some((candidate) =>
+    TOOL_COMPLETION_CLAIM_GUARDRAIL_PATTERNS.some((pattern) => pattern.test(candidate)),
+  );
+}
+
+function looksLikeFinalizationRequest(text: unknown, maxTextChars: number): boolean {
+  return buildGuardrailTextScanCandidates(text, maxTextChars).some((candidate) =>
+    USER_REQUESTS_FINALIZATION_PATTERNS.some((pattern) => pattern.test(candidate)),
+  );
 }
 
 function looksLikeStructuredToolIntent(text: unknown, maxTextChars: number): boolean {
@@ -574,6 +612,20 @@ function looksLikeBareToolCallText(text: unknown, maxTextChars: number): boolean
     return false;
   }
   return Boolean(detectToolCallShapedText(candidate));
+}
+
+function looksLikeNonAnswerPlaceholder(text: unknown, maxTextChars: number): boolean {
+  const trimmed = String(text ?? "").trim();
+  if (!trimmed || trimmed.length > Math.min(maxTextChars, 24)) {
+    return false;
+  }
+  const normalized = trimmed
+    .replace(/```[\s\S]*?```/gu, "")
+    .replace(/[\s\u200B-\u200D\uFEFF]/gu, "");
+  if (!normalized) {
+    return false;
+  }
+  return /^[.…。．.]+$/u.test(normalized);
 }
 
 function detectToolCallTextGuardrail(params: {
@@ -672,12 +724,13 @@ function shouldConsiderToolIntentGuardrail(params: ToolIntentGuardrailCommonPara
   const trimmed = String(params.text ?? "").trim();
   const thinking = String(params.thinkingText ?? "").trim();
   return Boolean(
-    (trimmed && trimmed.length <= params.config.maxTextChars) ||
+    trimmed ||
       (thinking && thinking.length <= params.config.maxTextChars),
   );
 }
 
 function shouldTriggerToolIntentGuardrail(params: ToolIntentGuardrailCommonParams): boolean {
+  const hasToolEvidence = (params.toolMetas?.length ?? 0) > 0;
   return (
     shouldConsiderToolIntentGuardrail(params) &&
     ((params.config.detectors.includes("toolCallText") &&
@@ -689,7 +742,12 @@ function shouldTriggerToolIntentGuardrail(params: ToolIntentGuardrailCommonParam
       (params.config.detectors.includes("structuredIntent") &&
       looksLikeStructuredToolIntent(params.text, params.config.maxTextChars)) ||
       (params.config.detectors.includes("regex") &&
-        looksLikeDeferredToolIntent(params.text, params.config.maxTextChars)))
+        (looksLikeDeferredToolIntent(params.text, params.config.maxTextChars) ||
+          (!hasToolEvidence &&
+            looksLikeUnsupportedToolCompletionClaim(
+              params.text,
+              params.config.maxTextChars,
+            )))))
   );
 }
 
@@ -725,7 +783,18 @@ async function evaluateToolIntentGuardrail(
   ) {
     return { trigger: true, detector: "regex", reason: "regex" };
   }
-  if (!params.config.detectors.includes("llmJudge") || !params.config.judge.enabled) {
+  if (
+    params.config.detectors.includes("regex") &&
+    (params.toolMetas?.length ?? 0) === 0 &&
+    looksLikeUnsupportedToolCompletionClaim(params.text, params.config.maxTextChars)
+  ) {
+    return { trigger: true, detector: "regex", reason: "completion claim without tool evidence" };
+  }
+  if (
+    !params.config.detectors.includes("llmJudge") ||
+    !params.config.judge.enabled ||
+    String(params.text ?? "").trim().length > params.config.maxTextChars
+  ) {
     return { trigger: false, detector: "none" };
   }
   return await (params.judge ?? judgeToolIntentWithLlm)({
@@ -1536,7 +1605,10 @@ export async function runEmbeddedPiAgent(
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
       let toolIntentGuardrailRetryAttempts = 0;
-      let toolIntentGuardrailFinalizationMode = false;
+      let toolIntentGuardrailFinalizationMode = looksLikeFinalizationRequest(
+        params.prompt,
+        toolIntentGuardrailConfig.maxTextChars,
+      );
       let compactionContinuationRetryAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
       // Cost-runaway breaker for #76293. State lives at the run-loop level
@@ -1573,6 +1645,7 @@ export async function runEmbeddedPiAgent(
       let reasoningOnlyRetryInstruction: string | null = null;
       let emptyResponseRetryInstruction: string | null = null;
       let toolIntentGuardrailRetryInstruction: string | null = null;
+      let nonAnswerRetryInstruction: string | null = null;
       let compactionContinuationRetryInstruction: string | null = null;
       let nextAttemptPromptOverride: string | null = null;
       const ackExecutionFastPathInstruction = resolveAckExecutionFastPathInstruction({
@@ -1590,6 +1663,8 @@ export async function runEmbeddedPiAgent(
       // visible-answer retry instruction instead.
       const MAX_EMPTY_ERROR_RETRIES = 3;
       let emptyErrorRetries = 0;
+      const MAX_NON_ANSWER_RETRIES = 1;
+      let nonAnswerRetries = 0;
       const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
       const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit(params.config);
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
@@ -1835,6 +1910,7 @@ export async function runEmbeddedPiAgent(
             reasoningOnlyRetryInstruction,
             emptyResponseRetryInstruction,
             toolIntentGuardrailRetryInstruction,
+            nonAnswerRetryInstruction,
             compactionContinuationRetryInstruction,
           ].filter(
             (value): value is string => typeof value === "string" && value.trim().length > 0,
@@ -3409,6 +3485,84 @@ export async function runEmbeddedPiAgent(
             );
             toolIntentGuardrailFinalizationMode = true;
           }
+          const nonAnswerGuardrailText = (
+            finalAssistantVisibleText ?? finalAssistantRawText
+          )?.trim();
+          const nonAnswerGuardrailTriggered =
+            isToolIntentGuardrailEnabledForModel({
+              config: toolIntentGuardrailConfig,
+              provider: reportedModelRef.provider,
+              modelId: reportedModelRef.model,
+            }) &&
+            !assistantMessageHasToolCall(sessionLastAssistant) &&
+            !attempt.clientToolCalls &&
+            !attempt.yieldDetected &&
+            !attempt.didSendViaMessagingTool &&
+            !attempt.didSendDeterministicApprovalPrompt &&
+            looksLikeNonAnswerPlaceholder(
+              nonAnswerGuardrailText,
+              toolIntentGuardrailConfig.maxTextChars,
+            );
+          if (nonAnswerGuardrailTriggered) {
+            if (nonAnswerRetries < MAX_NON_ANSWER_RETRIES) {
+              nonAnswerRetries += 1;
+              nonAnswerRetryInstruction = NON_ANSWER_RETRY_INSTRUCTION;
+              log.warn(
+                `non-answer guardrail detected placeholder assistant text: runId=${params.runId} sessionId=${params.sessionId} provider=${reportedModelRef.provider}/${reportedModelRef.model} -- retrying ${nonAnswerRetries}/${MAX_NON_ANSWER_RETRIES}`,
+              );
+              continue;
+            }
+            log.warn(
+              `non-answer guardrail detected placeholder assistant text: runId=${params.runId} sessionId=${params.sessionId} provider=${reportedModelRef.provider}/${reportedModelRef.model}`,
+            );
+            const nonAnswerReplayInvalid = resolveReplayInvalidForAttempt(
+              NON_ANSWER_GUARDRAIL_MESSAGE,
+            );
+            const nonAnswerLivenessState = resolveRunLivenessState({
+              payloadCount: 0,
+              aborted,
+              timedOut,
+              attempt,
+              incompleteTurnText: NON_ANSWER_GUARDRAIL_MESSAGE,
+            });
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid: nonAnswerReplayInvalid,
+              livenessState: nonAnswerLivenessState,
+              stopReason: "error",
+            });
+            return {
+              payloads: [
+                {
+                  text: NON_ANSWER_GUARDRAIL_MESSAGE,
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+                finalPromptText: attempt.finalPromptText,
+                finalAssistantVisibleText,
+                finalAssistantRawText,
+                replayInvalid: nonAnswerReplayInvalid,
+                livenessState: nonAnswerLivenessState,
+                agentHarnessResultClassification: attempt.agentHarnessResultClassification,
+                stopReason: "error",
+                toolSummary: attemptToolSummary,
+                ...(failureSignal ? { failureSignal } : {}),
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
+              heartbeatToolResponse: attempt.heartbeatToolResponse,
+              successfulCronAdds: attempt.successfulCronAdds,
+              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+            };
+          }
           if (toolIntentGuardrailConfig.detectors.includes("toolCallText")) {
             const earlyToolCallTextGuardrailText = (
               finalAssistantVisibleText ?? finalAssistantRawText
@@ -4151,6 +4305,9 @@ function resolveAuthProfileStateProvider(
 const testing = {
   looksLikeDeferredToolIntent,
   looksLikeBareToolCallText,
+  looksLikeNonAnswerPlaceholder,
+  looksLikeUnsupportedToolCompletionClaim,
+  looksLikeFinalizationRequest,
   looksLikeStructuredToolIntent,
   matchesModelPattern,
   evaluateToolIntentGuardrail,
