@@ -3682,6 +3682,13 @@ export async function runEmbeddedAttempt(
         if (!isRawModelRun) {
           effectivePrompt = annotateInterSessionPromptText(effectivePrompt, params.inputProvenance);
         }
+        let plannedExecution:
+          | {
+              applied: true;
+              packetId: string;
+              jobId?: string;
+            }
+          | undefined;
         const recentUserIntentTexts = activeSession.messages
           .filter((message) => message.role === "user")
           .slice(-4)
@@ -3705,6 +3712,11 @@ export async function runEmbeddedAttempt(
             });
         if (plannedExecutionRewrite) {
           effectivePrompt = plannedExecutionRewrite.prompt;
+          plannedExecution = {
+            applied: true,
+            packetId: plannedExecutionRewrite.packetId,
+            ...(plannedExecutionRewrite.jobId ? { jobId: plannedExecutionRewrite.jobId } : {}),
+          };
           log.info(
             `planned execution packet applied: packet=${plannedExecutionRewrite.packetId} ` +
               `jobId=${plannedExecutionRewrite.jobId ?? "n/a"} runId=${params.runId} ` +
@@ -4873,6 +4885,7 @@ export async function runEmbeddedAttempt(
         diagnosticTrace,
         bootstrapPromptWarningSignaturesSeen: bootstrapPromptWarning.warningSignaturesSeen,
         bootstrapPromptWarningSignature: bootstrapPromptWarning.signature,
+        ...(plannedExecution ? { plannedExecution } : {}),
         systemPromptReport,
         finalPromptText,
         messagesSnapshot,

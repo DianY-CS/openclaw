@@ -487,7 +487,7 @@ prompt/usage metrics by turn, phase, and model.
 
 Options:
   --runs <n>                  Number of runs (default: 3)
-  --phase <phase>             create-request, wait-validate-recording, deliver-recording-or-mock-media, or full-e2e (default: create-request)
+  --phase <phase>             rewrite-smoke, create-request, wait-validate-recording, deliver-recording-or-mock-media, or full-e2e (default: create-request)
   --model <provider/model>    Model override (default: ${DEFAULT_MODEL})
   --timeout <seconds>         OpenClaw agent timeout (default: ${DEFAULT_TIMEOUT_SECONDS})
   --session-prefix <prefix>   Session key prefix (default: qwen-planned-executor)
@@ -543,6 +543,7 @@ function parseArgs(argv) {
       options.phase = readValue();
       if (
         ![
+          "rewrite-smoke",
           "create-request",
           "wait-validate-recording",
           "deliver-recording-or-mock-media",
@@ -550,7 +551,7 @@ function parseArgs(argv) {
         ].includes(options.phase)
       ) {
         throw new Error(
-          "--phase must be create-request, wait-validate-recording, deliver-recording-or-mock-media, or full-e2e",
+          "--phase must be rewrite-smoke, create-request, wait-validate-recording, deliver-recording-or-mock-media, or full-e2e",
         );
       }
     } else if (arg === "--model") {
@@ -3099,6 +3100,52 @@ function summarize(results) {
   };
 }
 
+async function runRewriteSmoke(options, index, runId) {
+  const sessionKey = `${options.sessionPrefix}-rewrite-smoke-${runId}-${index}`;
+  const startedAt = new Date().toISOString();
+  const processResult = await runProcess(
+    "node",
+    ["scripts/test-projects.mjs", "src/agents/planned-execution.test.ts"],
+    Math.min(options.timeoutSeconds, 120),
+  );
+  const ok = processResult.code === 0 && !processResult.timedOut;
+  const evidence = [
+    processResult.stdout.includes("1 passed") ? "planned-execution test file passed" : null,
+    processResult.stdout.includes("6 passed") ? "planned-execution route tests passed" : null,
+  ].filter(Boolean);
+  return {
+    ok,
+    sessionKey,
+    startedAt,
+    completedAt: new Date().toISOString(),
+    classification: {
+      score: ok ? 100 : 0,
+      checks: {
+        openClawRewriteSmoke: ok,
+        plannedExecutionTestsPassed: ok,
+      },
+      evidence,
+      diagnostics: {
+        exitCode: processResult.code,
+        signal: processResult.signal,
+        timedOut: processResult.timedOut,
+        stderrTail: processResult.stderr.slice(-1000),
+      },
+    },
+    usage: {
+      phases: {
+        rewrite_smoke: {
+          turns: 1,
+          assistantCalls: 0,
+          promptEstimatedTokens: 0,
+          promptChars: 0,
+          usage: {},
+        },
+      },
+      total: {},
+    },
+  };
+}
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const runId = Date.now().toString(36);
@@ -3108,13 +3155,15 @@ async function main() {
   for (let index = 1; index <= options.runs; index += 1) {
     process.stdout.write(`planned-executor ${index}/${options.runs}\n`);
     const result =
-      options.phase === "wait-validate-recording"
-        ? await runWaitValidateRecording(options, index, runId)
+      options.phase === "rewrite-smoke"
+        ? await runRewriteSmoke(options, index, runId)
+        : options.phase === "wait-validate-recording"
+          ? await runWaitValidateRecording(options, index, runId)
         : options.phase === "deliver-recording-or-mock-media"
-          ? await runDeliverRecordingOrMockMedia(options, index, runId)
-          : options.phase === "full-e2e"
-            ? await runFullE2E(options, index, runId)
-        : await runOne(options, index, runId);
+            ? await runDeliverRecordingOrMockMedia(options, index, runId)
+            : options.phase === "full-e2e"
+              ? await runFullE2E(options, index, runId)
+              : await runOne(options, index, runId);
     results.push(result);
     const summary = summarize(results);
     writeJson(outputPath, {

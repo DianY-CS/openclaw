@@ -112,6 +112,11 @@ export type EmbeddedRunAttemptResult = {
   sessionFileUsed?: string;
   diagnosticTrace?: DiagnosticTraceContext;
   agentHarnessId?: string;
+  plannedExecution?: {
+    applied: true;
+    packetId: string;
+    jobId?: string;
+  };
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   promptTimeoutOutcome?: {
     message?: string;

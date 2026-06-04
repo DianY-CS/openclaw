@@ -14,6 +14,11 @@ export type EmbeddedPiAgentMeta = {
   sessionFile?: string;
   provider: string;
   model: string;
+  plannedExecution?: {
+    applied: true;
+    packetId: string;
+    jobId?: string;
+  };
   contextTokens?: number;
   agentHarnessId?: string;
   fallbackAttempts?: FallbackAttempt[];
