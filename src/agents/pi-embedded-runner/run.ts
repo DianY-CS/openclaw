@@ -45,6 +45,7 @@ import {
 } from "../command/session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
+import { resolvePlannedExecutionFinalizer } from "../planned-execution.js";
 import {
   coerceToFailoverError,
   describeFailoverError,
@@ -3598,13 +3599,48 @@ export async function runEmbeddedPiAgent(
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
             heartbeatToolResponse: attempt.heartbeatToolResponse,
           });
-          const payloadsWithToolMedia = mergeAttemptToolMediaPayloads({
+          let payloadsWithToolMedia: ReplyPayload[] | undefined = mergeAttemptToolMediaPayloads({
             payloads,
             toolMediaUrls: attempt.toolMediaUrls,
             toolAudioAsVoice: attempt.toolAudioAsVoice,
             toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           });
+          const payloadAlreadyHasMedia = (payloadsWithToolMedia ?? []).some((payload) =>
+            Boolean(payload.mediaUrl?.trim() || payload.mediaUrls?.some((url) => url.trim())),
+          );
+          const plannedExecutionFinalizer =
+            attempt.didSendViaMessagingTool || payloadAlreadyHasMedia
+              ? undefined
+              : await resolvePlannedExecutionFinalizer({
+                  plannedExecution: attempt.plannedExecution,
+                });
+          const plannedExecutionFinalizerApplied = plannedExecutionFinalizer?.ok === true;
+          if (plannedExecutionFinalizer?.ok) {
+            payloadsWithToolMedia = [plannedExecutionFinalizer.payload];
+            agentMeta.plannedExecutionFinalizer = {
+              applied: true,
+              packetId: plannedExecutionFinalizer.packetId,
+              jobId: plannedExecutionFinalizer.jobId,
+              recordingPath: plannedExecutionFinalizer.recordingPath,
+              durationSeconds: plannedExecutionFinalizer.probe.durationSeconds,
+              averageFps: plannedExecutionFinalizer.probe.averageFps,
+            };
+            log.info(
+              `planned execution finalizer applied: packet=${plannedExecutionFinalizer.packetId} jobId=${sanitizeForLog(plannedExecutionFinalizer.jobId)} recording=${sanitizeForLog(plannedExecutionFinalizer.recordingPath)}`,
+            );
+          } else if (plannedExecutionFinalizer) {
+            agentMeta.plannedExecutionFinalizer = {
+              applied: false,
+              packetId: plannedExecutionFinalizer.packetId,
+              ...(plannedExecutionFinalizer.jobId ? { jobId: plannedExecutionFinalizer.jobId } : {}),
+              reason: plannedExecutionFinalizer.reason,
+            };
+            log.warn(
+              `planned execution finalizer skipped: packet=${plannedExecutionFinalizer.packetId} jobId=${sanitizeForLog(plannedExecutionFinalizer.jobId ?? "")} reason=${sanitizeForLog(plannedExecutionFinalizer.reason)}`,
+            );
+          }
+
           const timedOutDuringPrompt =
             timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution;
           const finalAssistantStopReason = (sessionLastAssistant?.stopReason ?? "")
@@ -4371,7 +4407,7 @@ export async function runEmbeddedPiAgent(
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
             lastToolError: attempt.lastToolError,
           });
-          if (toolIntentGuardrailVerdict.trigger) {
+          if (toolIntentGuardrailVerdict.trigger && !plannedExecutionFinalizerApplied) {
             const toolIntentGuardrailReason = toolIntentGuardrailVerdict.reason
               ? ` reason=${sanitizeForLog(toolIntentGuardrailVerdict.reason)}`
               : "";

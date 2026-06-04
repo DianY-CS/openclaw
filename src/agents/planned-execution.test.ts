@@ -1,7 +1,12 @@
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { describe, expect, it } from "vitest";
 import {
   looksLikeGodotRecordingExecutionRequest,
+  resolvePlannedExecutionFinalizer,
   resolvePlannedExecutionRewrite,
 } from "./planned-execution.js";
 
@@ -168,4 +173,82 @@ describe("planned execution packet routing", () => {
     });
     expect(rewrite?.packetId).toBe("godotRecording");
   });
+  async function writeGodotRecordingFixture(params?: {
+    durationSeconds?: number;
+    averageFps?: number;
+    jobId?: string;
+  }) {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-planned-exec-"));
+    const jobId = params?.jobId ?? "qwen_planned_godot_recording_test-run";
+    const resultDir = path.join(workspaceRoot, "jobs", "game", "results", jobId);
+    await mkdir(resultDir, { recursive: true });
+    const probe = {
+      duration_seconds: params?.durationSeconds ?? 15.1,
+      frame_count: 906,
+      average_fps: params?.averageFps ?? 60,
+    };
+    await writeFile(
+      path.join(resultDir, "status.json"),
+      JSON.stringify({ status: "done", job_id: jobId, video_probe: probe }),
+    );
+    await writeFile(path.join(resultDir, "video_probe.json"), JSON.stringify(probe));
+    await writeFile(path.join(resultDir, "recording.mp4"), Buffer.from("fake mp4"));
+    return { workspaceRoot, jobId, resultDir };
+  }
+
+  it("finalizes a validated Godot recording into a media reply payload", async () => {
+    const fixture = await writeGodotRecordingFixture();
+
+    const result = await resolvePlannedExecutionFinalizer({
+      plannedExecution: {
+        packetId: "godotRecording",
+        jobId: fixture.jobId,
+      },
+      workspaceRoot: fixture.workspaceRoot,
+    });
+
+    expect(result?.ok).toBe(true);
+    if (result?.ok !== true) {
+      throw new Error("expected successful finalizer result");
+    }
+    expect(result.payload.mediaUrl).toBe(path.join(fixture.resultDir, "recording.mp4"));
+    expect(result.payload.text).toContain("15.1s");
+    expect(result.probe.averageFps).toBe(60);
+  });
+
+  it("does not finalize recordings that are too short", async () => {
+    const fixture = await writeGodotRecordingFixture({ durationSeconds: 0.8 });
+
+    const result = await resolvePlannedExecutionFinalizer({
+      plannedExecution: {
+        packetId: "godotRecording",
+        jobId: fixture.jobId,
+      },
+      workspaceRoot: fixture.workspaceRoot,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      packetId: "godotRecording",
+      jobId: fixture.jobId,
+      reason: "recording_too_short",
+    });
+  });
+
+  it("rejects unsafe Godot recording job ids", async () => {
+    const result = await resolvePlannedExecutionFinalizer({
+      plannedExecution: {
+        packetId: "godotRecording",
+        jobId: "../qwen_planned_godot_recording_escape",
+      },
+      workspaceRoot: await mkdtemp(path.join(os.tmpdir(), "openclaw-planned-exec-")),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      packetId: "godotRecording",
+      reason: "missing_or_unsafe_job_id",
+    });
+  });
+
 });

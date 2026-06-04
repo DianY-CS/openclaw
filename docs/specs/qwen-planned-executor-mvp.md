@@ -159,6 +159,7 @@ For the Godot recording scenario:
 - Non-Qwen models are not rewritten unless config explicitly matches them.
 - Plan-only requests remain plan-only.
 - Runtime logs include the packet id and job id when a packet is applied.
+- If a planned `godotRecording` run has produced a validated recording but the executor fails to complete delivery/finalization, the runtime may apply a post-run finalizer that returns the recording as a media reply payload and records `agentMeta.plannedExecutionFinalizer`.
 - Local config/secrets are not committed.
 
 ## Update Policy
@@ -185,8 +186,11 @@ Implemented in this branch so far:
   non-Telegram, non-Godot local exercise path for the OpenClaw rewrite rules;
 - matching Telegram/user requests are routed through the same embedded-runner
   rewrite path when `messageChannel` is `telegram` and planned execution config
-  matches the active model.
+  matches the active model;
+- a `godotRecording` post-run finalizer validates `status.json`, `video_probe.json`,
+  and `recording.mp4`, then returns a media reply payload when Qwen completed the
+  recording but did not reliably send/finalize it.
 
-The next step is to validate this through a live Telegram-triggered run, then
-replace mock delivery with real Telegram video delivery once the orchestration
-path is stable.
+The next step is to validate the finalizer through a live Telegram-triggered run,
+then decide whether Qwen should still attempt direct Telegram video sending or
+whether OpenClaw should own final media delivery for planned executor packets.
