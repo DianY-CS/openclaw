@@ -3360,6 +3360,7 @@ export async function runEmbeddedAttempt(
       let attemptUsage: NormalizedUsage | undefined;
       let cacheBreak: PromptCacheBreak | null = null;
       let promptCache: EmbeddedRunAttemptResult["promptCache"];
+      let plannedExecution: EmbeddedRunAttemptResult["plannedExecution"];
       let lastCallUsage: NormalizedUsage | undefined;
       let compactionOccurredThisAttempt = false;
       let finalPromptText: string | undefined;
@@ -3682,13 +3683,6 @@ export async function runEmbeddedAttempt(
         if (!isRawModelRun) {
           effectivePrompt = annotateInterSessionPromptText(effectivePrompt, params.inputProvenance);
         }
-        let plannedExecution:
-          | {
-              applied: true;
-              packetId: string;
-              jobId?: string;
-            }
-          | undefined;
         const recentUserIntentTexts = activeSession.messages
           .filter((message) => message.role === "user")
           .slice(-4)
