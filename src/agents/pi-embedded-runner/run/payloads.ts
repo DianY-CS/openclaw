@@ -120,6 +120,12 @@ function normalizeReplyTextForComparison(text: string): string {
   return normalizeTextForComparison(parseReplyDirectives(text).text ?? "");
 }
 
+function stripResponseModeProtocol(text: string): string {
+  return text
+    .replace(/^\s*RESPONSE_MODE:\s*(?:final|tool_required)\s*\r?\n+/iu, "")
+    .trimStart();
+}
+
 function shouldIncludeToolErrorDetails(params: {
   lastToolError: ToolErrorSummary;
   isCronTrigger?: boolean;
@@ -449,6 +455,7 @@ export function buildEmbeddedRunPayloads(params: {
   const hasUserFacingErrorReply = replyItems.some((item) => item.isError === true);
   let hasUserFacingFailureAcknowledgement = false;
   for (const text of answerTexts) {
+    const visibleText = stripResponseModeProtocol(text);
     const {
       text: cleanedText,
       mediaUrls,
@@ -456,7 +463,7 @@ export function buildEmbeddedRunPayloads(params: {
       replyToId,
       replyToTag,
       replyToCurrent,
-    } = parseReplyDirectives(text);
+    } = parseReplyDirectives(visibleText);
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
       continue;
     }

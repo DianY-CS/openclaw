@@ -94,6 +94,14 @@ export const EmbeddedPiToolIntentGuardrailSchema = z
   })
   .strict();
 
+export const EmbeddedPiPlannedExecutionSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    models: z.array(z.string().min(1)).optional(),
+    packets: z.array(z.literal("godotRecording")).optional(),
+  })
+  .strict();
+
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
@@ -1102,6 +1110,7 @@ export const AgentEntrySchema = z
       .object({
         executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
         toolIntentGuardrail: EmbeddedPiToolIntentGuardrailSchema.optional(),
+        plannedExecution: EmbeddedPiPlannedExecutionSchema.optional(),
       })
       .strict()
       .optional(),

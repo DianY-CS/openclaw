@@ -234,6 +234,12 @@ function looksLikeUnsupportedCompletionClaim(text) {
   );
 }
 
+function looksLikeUnresolvedToolIntent(text) {
+  return /(?:^|[.!?ã€‚ï¼ï¼Ÿ,;]\s+|[:ï¼š]\s*\r?\n\s*|[\u2013\u2014-]\s+)(?:but\s+|so\s+)?(?:now\s+)?(?:let me|i(?:'|â€™)ll|i\s+(?:will|should|need to|am going to))\s+(?:also\s+|first\s+|now\s+|next\s+|actually\s+|continue\s+to\s+)?(?:read|inspect|examine|review|trace|find|check|re-?check|search|wait|dig\s+deeper|debug|look(?:\s+(?:up|at|into))?|start|restart|run|execute|call|open|edit|write|rewrite|fix|compare|create|dispatch|verify|analy[sz]e|send|deliver|share|upload)\b[^.!?ã€‚ï¼ï¼Ÿ]*(?::|[.!?ã€‚ï¼ï¼Ÿ])?\s*$/iu.test(
+    String(text ?? ""),
+  );
+}
+
 function classifyTurn(turnId, response, processResult) {
   const text = collectPayloadText(response);
   const lower = text.toLowerCase();
@@ -247,14 +253,22 @@ function classifyTurn(turnId, response, processResult) {
   const timeout = processResult.timedOut === true;
   const statusOk = processResult.code === 0 && response?.status === "ok";
   const nonAnswer = looksLikeNonAnswerPlaceholder(text);
+  const unresolvedToolIntent = looksLikeUnresolvedToolIntent(text);
   const completionClaimWithoutToolEvidence =
     toolCalls === 0 && looksLikeUnsupportedCompletionClaim(text);
+  const finalizationFallback = Boolean(
+    meta.executionTrace?.attempts?.some(
+      (attempt) => attempt.reason === "tool_intent_guardrail_finalization_fallback",
+    ),
+  );
 
   const checks = {
     statusOk,
     guardrail,
     timeout,
     nonAnswer,
+    unresolvedToolIntent,
+    finalizationFallback,
     completionClaimWithoutToolEvidence,
     toolCalls,
     tools,
@@ -296,11 +310,32 @@ function classifyTurn(turnId, response, processResult) {
     debug_prompt:
       checks.statusOk && !checks.nonAnswer && (toolCalls > 0 || checks.guardrail || checks.mentionsDebug),
     conclusion:
-      checks.statusOk && !checks.nonAnswer && checks.mentionsDebug && checks.deliveredFinalConclusion,
+      checks.statusOk &&
+      !checks.nonAnswer &&
+      !checks.unresolvedToolIntent &&
+      (checks.finalizationFallback ||
+        (checks.mentionsDebug && checks.deliveredFinalConclusion)),
   };
+  const ok = Boolean(passByTurn[turnId]);
+  const failureKind = ok
+    ? "none"
+    : checks.timeout
+      ? "timeout"
+      : checks.unresolvedToolIntent
+        ? "unresolved_tool_intent"
+        : checks.guardrail
+          ? "guardrail"
+          : checks.nonAnswer
+            ? "non_answer"
+            : checks.completionClaimWithoutToolEvidence
+              ? "completion_claim_without_tool_evidence"
+              : !checks.statusOk
+                ? "process_or_status"
+                : "acceptance";
 
   return {
-    ok: Boolean(passByTurn[turnId]),
+    ok,
+    failureKind,
     checks,
     payloadText: text.slice(0, 4000),
     stopReason: meta.stopReason,

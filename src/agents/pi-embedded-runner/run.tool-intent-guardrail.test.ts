@@ -4,11 +4,14 @@ import { __testing } from "./run.js";
 
 const {
   evaluateToolIntentGuardrail,
+  buildToolIntentFinalizationFallbackText,
   looksLikeBareToolCallText,
   looksLikeDeferredToolIntent,
   looksLikeFinalizationRequest,
   looksLikeNonAnswerPlaceholder,
   looksLikeUnsupportedToolCompletionClaim,
+  parseExecutionPhaseLabel,
+  parseResponseMode,
   looksLikeStructuredToolIntent,
   matchesModelPattern,
   resolveToolIntentGuardrailConfig,
@@ -104,6 +107,74 @@ describe("embedded Pi tool-intent guardrail", () => {
     })).toBe(true);
     expect(looksLikeStructuredToolIntent("ACTION_INTENT\naction: read\nreason: missing type", 600))
       .toBe(false);
+  });
+
+  it("parses execution phase labels as recovery anchors", async () => {
+    expect(parseExecutionPhaseLabel("EXEC_PHASE: SEND_RECORDING", 600)).toBe("SEND_RECORDING");
+    expect(parseExecutionPhaseLabel("EXECUTION_PHASE: poll-status", 600)).toBe("POLL_STATUS");
+    expect(parseExecutionPhaseLabel("Phase CREATE_REQUEST:", 600)).toBe("CREATE_REQUEST");
+    expect(parseExecutionPhaseLabel("Phase 2 - VALIDATE_REQUEST:", 600)).toBe(
+      "VALIDATE_REQUEST",
+    );
+    expect(parseExecutionPhaseLabel("Phase UNKNOWN:", 600)).toBeNull();
+
+    const verdict = await evaluateToolIntentGuardrail({
+      config: enabledConfig,
+      provider: "llamacpp",
+      modelId: "Qwen3.6-35B-A3B-APEX-I-Balanced.gguf",
+      text: "EXEC_PHASE: SEND_RECORDING",
+    });
+
+    expect(verdict).toMatchObject({
+      trigger: true,
+      detector: "phaseLabel",
+      reason: "execution phase declared without tool call: SEND_RECORDING",
+      phase: "SEND_RECORDING",
+    });
+  });
+
+  it("detects response-mode protocol violations", async () => {
+    expect(parseResponseMode("RESPONSE_MODE: final\nKnown: enough evidence", 600)).toBe("final");
+    expect(parseResponseMode("RESPONSE_MODE: tool_required\nACTION_INTENT", 600)).toBe(
+      "tool_required",
+    );
+
+    const toolRequired = await evaluateToolIntentGuardrail({
+      config: enabledConfig,
+      provider: "llamacpp",
+      modelId: "Qwen3.6-35B-A3B-APEX-I-Balanced.gguf",
+      text: "RESPONSE_MODE: tool_required\nACTION_INTENT\ntype: tool_required\naction: inspect results\nreason: missing evidence",
+    });
+    expect(toolRequired).toMatchObject({
+      trigger: true,
+      detector: "responseMode",
+    });
+
+    const missingMode = await evaluateToolIntentGuardrail({
+      config: enabledConfig,
+      provider: "llamacpp",
+      modelId: "Qwen3.6-35B-A3B-APEX-I-Balanced.gguf",
+      text: "Let me actually check the results before concluding.",
+      requireResponseMode: true,
+    });
+    expect(missingMode).toMatchObject({
+      trigger: true,
+      detector: "responseMode",
+      reason: "missing response mode for finalization request",
+    });
+
+    const finalButStillInvestigating = await evaluateToolIntentGuardrail({
+      config: enabledConfig,
+      provider: "llamacpp",
+      modelId: "Qwen3.6-35B-A3B-APEX-I-Balanced.gguf",
+      text: "RESPONSE_MODE: final\nThe result directory exists. Let me actually inspect the files.",
+      requireResponseMode: true,
+    });
+    expect(finalButStillInvestigating).toMatchObject({
+      trigger: true,
+      detector: "responseMode",
+      reason: "final response mode still promised more tool work",
+    });
   });
 
   it("detects bare tool-call-shaped assistant text", async () => {
@@ -270,12 +341,74 @@ describe("embedded Pi tool-intent guardrail", () => {
     expect(looksLikeDeferredToolIntent("Now let me start the runner in the background:", 600)).toBe(
       true,
     );
+    expect(looksLikeDeferredToolIntent("Here's what I need to do now:\n\nLet me execute that now:", 600))
+      .toBe(true);
+    expect(
+      looksLikeDeferredToolIntent(
+        "Let me dig deeper into what's happening — check the screenshot and inspect the scripts.",
+        600,
+      ),
+    ).toBe(true);
     expect(
       looksLikeDeferredToolIntent(
         `${"Known evidence. ".repeat(80)}Now I have a clear picture. Let me check the screenshot from the most recent run to see what the game looks like.`,
         600,
       ),
     ).toBe(true);
+    expect(
+      looksLikeDeferredToolIntent(
+        "Now I have the full picture. Let me trace the `_ready()` flow:",
+        600,
+      ),
+    ).toBe(true);
+    expect(
+      looksLikeDeferredToolIntent(
+        "The result directory exists with files, but let me check what's actually in them - especially the video probe and run log.",
+        600,
+      ),
+    ).toBe(true);
+    expect(looksLikeDeferredToolIntent("Request file created. Validating its contents now.", 600))
+      .toBe(true);
+    expect(
+      looksLikeDeferredToolIntent(
+        "Project exists, request dir confirmed, request file written. Now reading it back to validate.",
+        600,
+      ),
+    ).toBe(true);
+    expect(
+      looksLikeDeferredToolIntent(
+        "Request validated — `record_seconds=15`, `record_fps=60`, `capture.fps=60`. Now polling status.",
+        600,
+      ),
+    ).toBe(true);
+    expect(
+      looksLikeDeferredToolIntent(
+        "A previous job already completed successfully with a valid 15-second 60fps recording. Let me read the existing request, then proceed to send the recording.",
+        600,
+      ),
+    ).toBe(true);
+    expect(looksLikeDeferredToolIntent("Recording validated. Sending it to you via Telegram now.", 600))
+      .toBe(true);
+    expect(
+      looksLikeDeferredToolIntent(
+        "Project exists. Now creating the request directory and writing the request JSON.",
+        600,
+      ),
+    ).toBe(true);
+    expect(
+      looksLikeDeferredToolIntent(
+        "Project exists. Now Phase 2 - ensure request directory exists, and Phase 3 - create the request JSON.",
+        600,
+      ),
+    ).toBe(true);
+    expect(
+      looksLikeDeferredToolIntent(
+        "Request validated. Phase 5 - poll status_path until the host runner is done.",
+        600,
+      ),
+    ).toBe(true);
+    expect(looksLikeDeferredToolIntent("Now let me validate the request was written correctly.", 600))
+      .toBe(true);
   });
 
   it("does not flag quoted or explanatory text as tool intent", () => {
@@ -306,6 +439,19 @@ describe("embedded Pi tool-intent guardrail", () => {
         finalAssistantHasToolCall: true,
       }),
     ).toBe(false);
+  });
+
+  it("can still trigger during explicit finalization even when the same turn has tool calls", () => {
+    expect(
+      shouldTriggerToolIntentGuardrail({
+        config: enabledConfig,
+        provider: "llamacpp",
+        modelId: "Qwen3.6-35B-A3B-APEX-I-Balanced.gguf",
+        text: "Now I have the full picture. Let me trace the `_ready()` flow:",
+        finalAssistantHasToolCall: true,
+        allowFinalizationTextAfterToolCall: true,
+      }),
+    ).toBe(true);
   });
 
   it("still triggers when only an earlier assistant step used tools", () => {
@@ -352,6 +498,46 @@ describe("embedded Pi tool-intent guardrail", () => {
         toolMetas: [],
       }),
     ).toBe(false);
+    expect(
+      shouldUseToolIntentGuardrailFinalizationAfterToolProgress({
+        retryAttempts: 2,
+        toolMetas: [],
+        sawToolProgressAfterRetry: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("preserves a useful finalization candidate instead of replacing it with the conservative fallback", () => {
+    const text = buildToolIntentFinalizationFallbackText({
+      lastAssistantText: [
+        "RESPONSE_MODE: final",
+        "",
+        "Root cause 1: the request used capture.record_seconds=15, but the runner only read the top-level record_seconds field, so the requested duration was ignored.",
+        "Root cause 2: capture_region was always computed from the Godot window, which bypassed the FFmpeg full-screen path and used the Python/mss frame capture path instead.",
+        "Fix: read the nested capture fields, only request a window region when explicitly configured, and add an ffmpeg fps=60 filter so frame_count / fps matches the requested recording duration.",
+      ].join("\n"),
+      toolMetas: [{ toolName: "exec" }, { toolName: "read" }],
+    });
+
+    expect(text).toContain("Root cause 1");
+    expect(text).toContain("capture.record_seconds=15");
+    expect(text).toContain("capture_region");
+    expect(text).toContain("fps=60");
+    expect(text).not.toContain("RESPONSE_MODE");
+    expect(text).not.toContain("Debugging conclusion");
+  });
+
+  it("builds a conservative finalization fallback instead of exposing guardrail internals", () => {
+    const text = buildToolIntentFinalizationFallbackText({
+      lastAssistantText: "Let me inspect the run log and scene to debug the recording issue.",
+      toolMetas: [{ toolName: "exec" }, { toolName: "read" }],
+    });
+
+    expect(text).toContain("Debugging conclusion");
+    expect(text).toContain("Recommended next change");
+    expect(text).toContain("exec, read");
+    expect(text).toContain("recording issue");
+    expect(text.toLowerCase()).not.toContain("tool-intent guardrail");
   });
 
   it("enables hybrid detector order when the LLM judge is configured", () => {

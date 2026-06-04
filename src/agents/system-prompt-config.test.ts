@@ -101,6 +101,36 @@ describe("resolveAgentSystemPromptConfig", () => {
         .toolIntentTemplateGuidance,
     ).toBe(false);
   });
+
+  it("enables planned execution guidance for matching local executor models", () => {
+    const config = {
+      agents: {
+        defaults: {
+          embeddedPi: {
+            plannedExecution: {
+              enabled: true,
+              models: ["llamacpp/*qwen*"],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      resolveAgentSystemPromptConfig({
+        config,
+        agentId: "main",
+        modelRef: "llamacpp/Qwen3.6-35B-A3B-APEX-I-Balanced.gguf",
+      }).plannedExecutionGuidance,
+    ).toBe(true);
+    expect(
+      resolveAgentSystemPromptConfig({
+        config,
+        agentId: "main",
+        modelRef: "openai-codex/gpt-5.5",
+      }).plannedExecutionGuidance,
+    ).toBe(false);
+  });
 });
 
 describe("buildConfiguredAgentSystemPrompt", () => {
@@ -144,7 +174,61 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Tool Intent Contract");
+    expect(prompt).toContain("RESPONSE_MODE: final");
+    expect(prompt).toContain("RESPONSE_MODE: tool_required");
     expect(prompt).toContain("ACTION_INTENT");
     expect(prompt).toContain("type: tool_required");
+  });
+
+  it("renders planned execution guidance for matching configured models", () => {
+    const prompt = buildConfiguredAgentSystemPrompt({
+      config: {
+        agents: {
+          defaults: {
+            embeddedPi: {
+              plannedExecution: {
+                enabled: true,
+                models: ["llamacpp/*qwen*"],
+              },
+            },
+          },
+        },
+      },
+      agentId: "main",
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["read", "exec", "message"],
+      runtimeInfo: {
+        model: "llamacpp/Qwen3.6-35B-A3B-APEX-I-Balanced.gguf",
+      },
+    });
+
+    expect(prompt).toContain("## Planned Execution Mode");
+    expect(prompt).toContain("act as an executor");
+    expect(prompt).toContain("do not claim delivery without send evidence");
+  });
+
+  it("does not render planned execution guidance for non-matching models", () => {
+    const prompt = buildConfiguredAgentSystemPrompt({
+      config: {
+        agents: {
+          defaults: {
+            embeddedPi: {
+              plannedExecution: {
+                enabled: true,
+                models: ["llamacpp/*qwen*"],
+              },
+            },
+          },
+        },
+      },
+      agentId: "main",
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["read", "exec", "message"],
+      runtimeInfo: {
+        model: "openai-codex/gpt-5.5",
+      },
+    });
+
+    expect(prompt).not.toContain("## Planned Execution Mode");
   });
 });

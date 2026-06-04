@@ -732,6 +732,8 @@ export function buildAgentSystemPrompt(params: {
   memoryCitationsMode?: MemoryCitationsMode;
   /** Include the structured fallback template that guardrails can detect. */
   toolIntentTemplateGuidance?: boolean;
+  /** Include prompt-level planner/executor/reviewer discipline for local executor models. */
+  plannedExecutionGuidance?: boolean;
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const acpEnabled = params.acpEnabled === true;
@@ -955,11 +957,27 @@ export function buildAgentSystemPrompt(params: {
     ? [
         "## Tool Intent Contract",
         "If your next step requires a tool, call the tool now. Do not only promise it.",
+        "When giving a final answer, start the visible answer with `RESPONSE_MODE: final`.",
+        "`RESPONSE_MODE: final` means you will not promise more checking, reading, running, rewriting, or sending in that same answer.",
         "If a tool is required but you cannot emit the call, output exactly:",
+        "RESPONSE_MODE: tool_required",
         "ACTION_INTENT",
         "type: tool_required",
         "action: <short action>",
         "reason: <why a tool is needed>",
+        "",
+      ]
+    : [];
+  const plannedExecutionSection = params.plannedExecutionGuidance
+    ? [
+        "## Planned Execution Mode",
+        "For complex, tool-heavy user tasks, act as an executor, not the workflow designer.",
+        "- If a planner/skill packet is present, follow it exactly; do not redesign the task.",
+        "- If no packet is present, choose the most specific relevant skill and use its Qwen/executor instructions when available.",
+        "- Work one step at a time: use tools for filesystem, process, verification, or message actions; otherwise return a structured final report.",
+        "- A step is complete only when its artifact or delivery evidence satisfies the stated success condition.",
+        "- For media delivery tasks, use the message tool or the relevant send-recording skill; do not claim delivery without send evidence.",
+        "- If blocked, report `status: blocked`, the exact blocker, and the single next permission or configuration needed.",
         "",
       ]
     : [];
@@ -1024,6 +1042,7 @@ export function buildAgentSystemPrompt(params: {
     acpEnabled,
     stableContextFiles,
     toolIntentTemplateGuidance: params.toolIntentTemplateGuidance === true,
+    plannedExecutionGuidance: params.plannedExecutionGuidance === true,
   });
   const stablePrefix = cacheStablePromptPrefix(stablePrefixCacheKey, () => {
     const lines = [
@@ -1101,6 +1120,7 @@ export function buildAgentSystemPrompt(params: {
         ],
       }),
       ...toolIntentContractSection,
+      ...plannedExecutionSection,
       ...buildOverridablePromptSection({
         override: providerSectionOverrides.execution_bias,
         fallback: buildExecutionBiasSection({

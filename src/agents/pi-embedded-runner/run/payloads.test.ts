@@ -67,6 +67,14 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Done.");
   });
 
+  it("strips response-mode protocol markers from user-visible assistant text", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["RESPONSE_MODE: final\nThe likely root cause is the runner schema."],
+    });
+
+    expectSinglePayloadText(payloads, "The likely root cause is the runner schema.");
+  });
+
   it("falls back to final-answer assistant text when streamed text only contains blanks", () => {
     const payloads = buildPayloads({
       assistantTexts: ["   "],

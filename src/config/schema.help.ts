@@ -1521,12 +1521,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional LLM-as-judge classifier for ambiguous assistant text. Disabled by default; when enabled it asks a small completion to return strict JSON before retrying.",
   "agents.defaults.embeddedPi.toolIntentGuardrail.judge.model":
     "Optional model ref used by the LLM judge. Omit to use the current agent's default model.",
+  "agents.defaults.embeddedPi.plannedExecution":
+    "Prompt-level planned execution discipline for local executor models. When enabled, the agent is told to follow planner/skill packets as an executor, verify completion gates, and report blockers instead of freely redesigning tool-heavy workflows.",
+  "agents.defaults.embeddedPi.plannedExecution.models":
+    'Provider/model matchers for planned execution guidance, using "*" wildcards such as "llamacpp/*qwen*". Omit to apply to every model when enabled.',
+  "agents.defaults.embeddedPi.plannedExecution.packets":
+    'Built-in planned execution packet ids to enable. Omit to enable all built-ins. Currently supported: "godotRecording".',
   "agents.list[].embeddedPi":
     "Optional per-agent embedded Pi overrides. Use this to opt specific agents into stricter GPT-5 execution behavior without changing the global default.",
   "agents.list[].embeddedPi.executionContract":
     'Optional per-agent embedded Pi execution contract override. Set "strict-agentic" to keep that agent acting through plan-only turns on OpenAI/OpenAI Codex GPT-5-family runs, or "default" to inherit the standard runner behavior.',
   "agents.list[].embeddedPi.toolIntentGuardrail":
     "Optional per-agent override for missing-tool-call guardrail settings, including detector order and LLM judge configuration.",
+  "agents.list[].embeddedPi.plannedExecution":
+    "Optional per-agent override for planned execution guidance. Use this to make a specific local-model agent act as a constrained executor without changing the global default.",
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
   "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",

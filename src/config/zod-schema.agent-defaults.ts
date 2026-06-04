@@ -11,6 +11,7 @@ import {
   MemorySearchSchema,
   AgentRunRetriesConfigSchema,
   EmbeddedPiToolIntentGuardrailSchema,
+  EmbeddedPiPlannedExecutionSchema,
 } from "./zod-schema.agent-runtime.js";
 import {
   BlockStreamingChunkSchema,
@@ -219,6 +220,7 @@ export const AgentDefaultsSchema = z
           .optional(),
         executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
         toolIntentGuardrail: EmbeddedPiToolIntentGuardrailSchema.optional(),
+        plannedExecution: EmbeddedPiPlannedExecutionSchema.optional(),
       })
       .strict()
       .optional(),

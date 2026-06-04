@@ -47,6 +47,20 @@ export type EmbeddedPiToolIntentGuardrailConfig = {
   };
 };
 
+export type EmbeddedPiPlannedExecutionConfig = {
+  /** Enable prompt-level planner/executor/reviewer discipline for local executor models. */
+  enabled?: boolean;
+  /** Provider/model matchers. Supports "*" wildcards; omitted means every model when enabled. */
+  models?: string[];
+  /**
+   * Planned execution packet ids to enable. Omitted means all built-in packets.
+   *
+   * Current built-in packets:
+   * - godotRecording: find/run/record/validate/send Godot gameplay captures.
+   */
+  packets?: Array<"godotRecording">;
+};
+
 export type Gpt5PromptOverlayConfig = {
   /** Friendly interaction-style layer for GPT-5-family models (default: friendly). */
   personality?: "friendly" | "on" | "off";
@@ -353,6 +367,8 @@ export type AgentDefaultsConfig = {
     executionContract?: EmbeddedPiExecutionContract;
     /** Optional model-scoped guardrail for missing tool calls after tool-intent text. */
     toolIntentGuardrail?: EmbeddedPiToolIntentGuardrailConfig;
+    /** Prompt-level planned execution discipline for local executor models. */
+    plannedExecution?: EmbeddedPiPlannedExecutionConfig;
   };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;

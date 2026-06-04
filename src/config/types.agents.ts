@@ -5,6 +5,7 @@ import type {
   EmbeddedPiToolIntentGuardrailConfig,
   AgentModelEntryConfig,
   EmbeddedPiExecutionContract,
+  EmbeddedPiPlannedExecutionConfig,
   SubagentDelegationMode,
 } from "./types.agent-defaults.js";
 import type {
@@ -153,6 +154,8 @@ export type AgentConfig = {
     executionContract?: EmbeddedPiExecutionContract;
     /** Optional per-agent guardrail override for missing tool calls after tool-intent text. */
     toolIntentGuardrail?: EmbeddedPiToolIntentGuardrailConfig;
+    /** Optional per-agent planned-execution prompt discipline override. */
+    plannedExecution?: EmbeddedPiPlannedExecutionConfig;
   };
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;

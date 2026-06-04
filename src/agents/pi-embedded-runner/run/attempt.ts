@@ -54,6 +54,7 @@ import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
+import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import {
   buildTrajectoryArtifacts,
   buildTrajectoryRunMetadata,
@@ -149,6 +150,7 @@ import {
 } from "../../pi-tools.policy.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../prompt-surface.js";
+import { resolvePlannedExecutionRewrite } from "../../planned-execution.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import { runAgentCleanupStep } from "../../run-cleanup-timeout.js";
@@ -3679,6 +3681,35 @@ export async function runEmbeddedAttempt(
         }
         if (!isRawModelRun) {
           effectivePrompt = annotateInterSessionPromptText(effectivePrompt, params.inputProvenance);
+        }
+        const recentUserIntentTexts = activeSession.messages
+          .filter((message) => message.role === "user")
+          .slice(-4)
+          .map((message) =>
+            extractTextFromChatContent((message as { content?: unknown }).content, {
+              joinWith: "\n",
+            }),
+          )
+          .filter((text): text is string => Boolean(text));
+        const plannedExecutionRewrite = isRawModelRun
+          ? undefined
+          : resolvePlannedExecutionRewrite({
+              prompt: effectivePrompt,
+              intentPrompt: [...recentUserIntentTexts, effectivePrompt].join("\n\n"),
+              config: params.config,
+              agentId: sessionAgentId,
+              provider: params.provider,
+              modelId: params.modelId,
+              runId: params.runId,
+              messageChannel: params.messageChannel,
+            });
+        if (plannedExecutionRewrite) {
+          effectivePrompt = plannedExecutionRewrite.prompt;
+          log.info(
+            `planned execution packet applied: packet=${plannedExecutionRewrite.packetId} ` +
+              `jobId=${plannedExecutionRewrite.jobId ?? "n/a"} runId=${params.runId} ` +
+              `sessionId=${params.sessionId} provider=${params.provider}/${params.modelId}`,
+          );
         }
         const effectiveTranscriptPrompt =
           params.transcriptPrompt === undefined ? undefined : params.transcriptPrompt;

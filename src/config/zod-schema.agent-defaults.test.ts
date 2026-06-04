@@ -199,6 +199,30 @@ describe("agent defaults schema", () => {
     );
   });
 
+  it("accepts embedded Pi planned execution on defaults and agent entries", () => {
+    const defaults = AgentDefaultsSchema.parse({
+      embeddedPi: {
+        plannedExecution: {
+          enabled: true,
+          models: ["llamacpp/*qwen*"],
+          packets: ["godotRecording"],
+        },
+      },
+    })!;
+    const agent = AgentEntrySchema.parse({
+      id: "qwen-executor",
+      embeddedPi: {
+        plannedExecution: {
+          enabled: false,
+        },
+      },
+    });
+
+    expect(defaults.embeddedPi?.plannedExecution?.models).toEqual(["llamacpp/*qwen*"]);
+    expect(defaults.embeddedPi?.plannedExecution?.packets).toEqual(["godotRecording"]);
+    expect(agent.embeddedPi?.plannedExecution?.enabled).toBe(false);
+  });
+
   it("accepts contextInjection: always", () => {
     const result = AgentDefaultsSchema.parse({ contextInjection: "always" })!;
     expect(result.contextInjection).toBe("always");

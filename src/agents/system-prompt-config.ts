@@ -16,6 +16,7 @@ export type ResolvedAgentSystemPromptConfig = Pick<
   | "modelAliasLines"
   | "memoryCitationsMode"
   | "toolIntentTemplateGuidance"
+  | "plannedExecutionGuidance"
 >;
 
 export type ConfiguredAgentSystemPromptParams = AgentSystemPromptRenderParams & {
@@ -26,8 +27,9 @@ export type ConfiguredAgentSystemPromptParams = AgentSystemPromptRenderParams & 
 export function resolveAgentSystemPromptConfig(params: {
   config?: OpenClawConfig;
   agentId?: string;
+  modelRef?: string;
 }): ResolvedAgentSystemPromptConfig {
-  const { config, agentId } = params;
+  const { config, agentId, modelRef } = params;
   const ownerDisplay = resolveOwnerDisplaySetting(config);
   const agentSubagents =
     config && agentId ? resolveAgentConfig(config, agentId)?.subagents : undefined;
@@ -42,7 +44,27 @@ export function resolveAgentSystemPromptConfig(params: {
     modelAliasLines: buildModelAliasLines(config),
     memoryCitationsMode: config?.memory?.citations,
     toolIntentTemplateGuidance: resolveToolIntentTemplateGuidance(config, agentId),
+    plannedExecutionGuidance: resolvePlannedExecutionGuidance(config, agentId, modelRef),
   };
+}
+
+function wildcardPatternMatches(pattern: string, value: string): boolean {
+  const escaped = pattern
+    .trim()
+    .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`, "iu").test(value.trim());
+}
+
+function modelMatchesPatterns(modelRef: string | undefined, patterns: string[] | undefined) {
+  if (!patterns || patterns.length === 0) {
+    return true;
+  }
+  const normalizedModelRef = modelRef?.trim();
+  if (!normalizedModelRef) {
+    return false;
+  }
+  return patterns.some((pattern) => wildcardPatternMatches(pattern, normalizedModelRef));
 }
 
 function resolveToolIntentTemplateGuidance(
@@ -63,9 +85,34 @@ function resolveToolIntentTemplateGuidance(
   return !detectors || detectors.length === 0 || detectors.includes("structuredIntent");
 }
 
+function resolvePlannedExecutionGuidance(
+  config: OpenClawConfig | undefined,
+  agentId: string | undefined,
+  modelRef: string | undefined,
+): boolean {
+  if (!config) {
+    return false;
+  }
+  const defaults = config.agents?.defaults?.embeddedPi?.plannedExecution;
+  const agentConfig = agentId ? resolveAgentConfig(config, agentId)?.embeddedPi : undefined;
+  const override = agentConfig?.plannedExecution;
+  const enabled = override?.enabled ?? defaults?.enabled;
+  if (enabled !== true) {
+    return false;
+  }
+  const models = override?.models ?? defaults?.models;
+  return modelMatchesPatterns(modelRef, models);
+}
+
 export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPromptParams) {
   const { config, agentId, ...renderParams } = params;
-  const configParams = config ? resolveAgentSystemPromptConfig({ config, agentId }) : {};
+  const configParams = config
+    ? resolveAgentSystemPromptConfig({
+        config,
+        agentId,
+        modelRef: renderParams.runtimeInfo?.model,
+      })
+    : {};
   return buildAgentSystemPrompt({
     ...renderParams,
     ...configParams,
