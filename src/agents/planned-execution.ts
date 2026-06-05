@@ -80,6 +80,11 @@ function normalizeForIntentMatch(prompt: string): string {
     .trim();
 }
 
+function parseGodotRecordingSendOnlyRetryJobId(prompt: string): string | undefined {
+  const match = prompt.match(/\bPLANNED_EXECUTION_SEND_ONLY_RETRY\s+job_id=([A-Za-z0-9_-]+)/u);
+  return safeGodotRecordingJobId(match?.[1]);
+}
+
 export function looksLikeGodotRecordingExecutionRequest(prompt: string): boolean {
   const text = normalizeForIntentMatch(prompt);
   if (!text) {
@@ -307,6 +312,41 @@ Important executor discipline:
 - Phase labels are invalid visible replies. A phase name alone is not completion evidence and will be treated as a failed tool-call attempt.
 - A tool-call turn must contain only tool calls. Do not include prose before or after the tool call.
 - If you are not done, keep using tools. If you are done, use RESPONSE_MODE: final.`;
+
+  return { packetId: "godotRecording", prompt, jobId };
+}
+
+function buildGodotRecordingSendOnlyPacket(params: {
+  jobId: string;
+  messageChannel?: string;
+}): PlannedExecutionRewrite | undefined {
+  const jobId = safeGodotRecordingJobId(params.jobId);
+  if (!jobId) {
+    return undefined;
+  }
+  const resultDir = `/home/node/.openclaw/workspace/jobs/game/results/${jobId}`;
+  const recordingPath = `${resultDir}/recording.mp4`;
+  const prompt = `PLANNED_EXECUTION_PACKET
+packet_id: godotRecording
+role: executor
+mode: send_recording_only
+
+The senior planner has already validated the Godot recording for this run. Do not restart earlier phases. Do not read, write, create, execute, process, poll, validate, or inspect files. Do not start Godot. Do not create a new request.
+
+Current run identity:
+- current_job_id: ${jobId}
+- recording_path: ${recordingPath}
+
+Required single action:
+- Call the message tool to send recording_path to the current ${params.messageChannel ?? "message"} conversation.
+- Use exactly: action "send", message "Here is the 15-second Godot gameplay recording.", filePath recording_path.
+
+Invalid actions in this retry:
+- Any read/write/exec/process/browser/search tool call.
+- Any request creation or validation.
+- Any visible prose before the message tool call.
+
+After the message tool succeeds, output RESPONSE_MODE: final with one JSON object that includes status "done", job_id "${jobId}", recording_path "${recordingPath}", and telegram_delivery evidence.`;
 
   return { packetId: "godotRecording", prompt, jobId };
 }
@@ -621,15 +661,23 @@ export function resolvePlannedExecutionRewrite(params: {
   }
   const modelRef =
     params.provider && params.modelId ? `${params.provider}/${params.modelId}` : params.modelId;
-  if (
-    !isPacketEnabled({
-      config: params.config,
-      agentId: params.agentId,
-      modelRef,
-      packetId: "godotRecording",
-    })
-  ) {
+  const enabled = isPacketEnabled({
+    config: params.config,
+    agentId: params.agentId,
+    modelRef,
+    packetId: "godotRecording",
+  });
+  if (!enabled) {
     return undefined;
+  }
+  const sendOnlyJobId = parseGodotRecordingSendOnlyRetryJobId(
+    [params.prompt, params.intentPrompt ?? ""].join("\n"),
+  );
+  if (sendOnlyJobId) {
+    return buildGodotRecordingSendOnlyPacket({
+      jobId: sendOnlyJobId,
+      messageChannel: params.messageChannel,
+    });
   }
   if (!looksLikeGodotRecordingExecutionRequest(params.intentPrompt ?? params.prompt)) {
     return undefined;

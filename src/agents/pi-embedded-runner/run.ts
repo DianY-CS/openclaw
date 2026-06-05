@@ -3685,7 +3685,10 @@ export async function runEmbeddedPiAgent(
             plannedExecutionSendRecoveryAttempts < MAX_PLANNED_EXECUTION_SEND_RECOVERY_RETRIES;
           if (plannedExecutionNeedsSendRecordingRetry) {
             plannedExecutionSendRecoveryAttempts += 1;
-            plannedExecutionRetryInstruction = buildExecutionPhaseRetryInstruction("SEND_RECORDING");
+            plannedExecutionRetryInstruction = [
+              buildExecutionPhaseRetryInstruction("SEND_RECORDING"),
+              `PLANNED_EXECUTION_SEND_ONLY_RETRY job_id=${plannedExecutionFinalizer.jobId}`,
+            ].join("\n\n");
             log.warn(
               `planned execution recording is valid but not delivered: runId=${params.runId} sessionId=${params.sessionId} jobId=${sanitizeForLog(plannedExecutionFinalizer.jobId)} -- retrying ${plannedExecutionSendRecoveryAttempts}/${MAX_PLANNED_EXECUTION_SEND_RECOVERY_RETRIES} with SEND_RECORDING correction`,
             );
