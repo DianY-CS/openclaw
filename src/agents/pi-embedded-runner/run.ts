@@ -2032,6 +2032,8 @@ export async function runEmbeddedPiAgent(
       let nonAnswerRetries = 0;
       const MAX_PLANNED_EXECUTION_RECOVERY_RETRIES = 1;
       let plannedExecutionRecoveryAttempts = 0;
+      const MAX_PLANNED_EXECUTION_SEND_PHASE_ATTEMPTS = 1;
+      let plannedExecutionSendPhaseAttempts = 0;
       const MAX_PLANNED_EXECUTION_SEND_RECOVERY_RETRIES = 1;
       let plannedExecutionSendRecoveryAttempts = 0;
       const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
@@ -3692,6 +3694,23 @@ export async function runEmbeddedPiAgent(
                 });
           let plannedExecutionFinalizerApplied = false;
           let plannedExecutionTerminalFailure = false;
+          const plannedExecutionNeedsSendRecordingPhase =
+            plannedExecutionFinalizer?.ok === true &&
+            attempt.plannedExecution?.packetId === "godotRecording" &&
+            !attempt.didSendViaMessagingTool &&
+            !payloadAlreadyHasMedia &&
+            plannedExecutionSendPhaseAttempts < MAX_PLANNED_EXECUTION_SEND_PHASE_ATTEMPTS;
+          if (plannedExecutionNeedsSendRecordingPhase) {
+            plannedExecutionSendPhaseAttempts += 1;
+            plannedExecutionRetryInstruction = [
+              buildExecutionPhaseRetryInstruction("SEND_RECORDING"),
+              `PLANNED_EXECUTION_SEND_ONLY_PHASE job_id=${plannedExecutionFinalizer.jobId}`,
+            ].join("\n\n");
+            log.info(
+              `planned execution recording is valid; entering SEND_RECORDING phase: runId=${params.runId} sessionId=${params.sessionId} jobId=${sanitizeForLog(plannedExecutionFinalizer.jobId)}`,
+            );
+            continue;
+          }
           const plannedExecutionNeedsSendRecordingRetry =
             plannedExecutionFinalizer?.ok === true &&
             attempt.plannedExecution?.packetId === "godotRecording" &&

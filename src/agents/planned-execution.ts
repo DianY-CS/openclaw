@@ -81,7 +81,9 @@ function normalizeForIntentMatch(prompt: string): string {
 }
 
 function parseGodotRecordingSendOnlyRetryJobId(prompt: string): string | undefined {
-  const match = prompt.match(/\bPLANNED_EXECUTION_SEND_ONLY_RETRY\s+job_id=([A-Za-z0-9_-]+)/u);
+  const match = prompt.match(
+    /\bPLANNED_EXECUTION_SEND_ONLY_(?:PHASE|RETRY)\s+job_id=([A-Za-z0-9_-]+)/u,
+  );
   return safeGodotRecordingJobId(match?.[1]);
 }
 

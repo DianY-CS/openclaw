@@ -167,6 +167,28 @@ describe("planned execution packet routing", () => {
     expect(rewrite?.prompt).not.toContain("record_seconds");
   });
 
+  it("rewrites planned SEND_RECORDING phases into send-only packets", () => {
+    const rewrite = resolvePlannedExecutionRewrite({
+      prompt:
+        "NEXT_PHASE=SEND_RECORDING.\n\nPLANNED_EXECUTION_SEND_ONLY_PHASE job_id=qwen_planned_godot_recording_abc-123",
+      intentPrompt:
+        "In my workspace, please find the Godot auto chess MVP project, run gameplay, record a 15-second 60fps video, validate the recording, and send it to me.",
+      config: qwenConfig,
+      agentId: "main",
+      provider: "llamacpp",
+      modelId: "Qwen3.6-35B-A3B-APEX-I-Balanced.gguf",
+      runId: "send-phase-run",
+      messageChannel: "telegram",
+    });
+
+    expect(rewrite?.packetId).toBe("godotRecording");
+    expect(rewrite?.jobId).toBe("qwen_planned_godot_recording_abc-123");
+    expect(rewrite?.prompt).toContain("mode: send_recording_only");
+    expect(rewrite?.prompt).toContain("Call the message tool to send recording_path");
+    expect(rewrite?.prompt).not.toContain("CREATE_REQUEST");
+    expect(rewrite?.prompt).not.toContain("POLL_STATUS");
+  });
+
   it("rewrites CREATE_REQUEST retries into create-request-only packets", () => {
     const rewrite = resolvePlannedExecutionRewrite({
       prompt:
