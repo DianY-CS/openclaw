@@ -45,7 +45,10 @@ import {
 } from "../command/session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
-import { resolvePlannedExecutionFinalizer } from "../planned-execution.js";
+import {
+  ensureGodotRecordingRequest,
+  resolvePlannedExecutionFinalizer,
+} from "../planned-execution.js";
 import {
   coerceToFailoverError,
   describeFailoverError,
@@ -1265,6 +1268,42 @@ function buildHandledReplyPayloads(reply?: ReplyPayload) {
   ];
 }
 
+const TERMINAL_PLANNED_EXECUTION_FAILURE_REASONS = new Set([
+  "missing_or_unsafe_job_id",
+  "missing_video_probe",
+  "request_missing",
+  "request_job_id_mismatch",
+  "request_project_path_mismatch",
+  "request_startup_wait_mismatch",
+  "request_record_seconds_mismatch",
+  "request_record_fps_mismatch",
+  "request_capture_missing",
+  "request_capture_record_seconds_mismatch",
+  "request_capture_fps_mismatch",
+  "recording_too_short",
+  "fps_too_low",
+  "effective_fps_too_low",
+]);
+
+function isTerminalPlannedExecutionFailure(
+  result: Awaited<ReturnType<typeof resolvePlannedExecutionFinalizer>>,
+): result is Extract<
+  NonNullable<Awaited<ReturnType<typeof resolvePlannedExecutionFinalizer>>>,
+  { ok: false }
+> {
+  return Boolean(result && !result.ok && TERMINAL_PLANNED_EXECUTION_FAILURE_REASONS.has(result.reason));
+}
+
+function buildTerminalPlannedExecutionFailurePayload(
+  result: Extract<NonNullable<Awaited<ReturnType<typeof resolvePlannedExecutionFinalizer>>>, { ok: false }>,
+): ReplyPayload {
+  const jobIdText = result.jobId ? ` job_id=${result.jobId}` : "";
+  return {
+    text: `Godot recording validation failed${jobIdText}: ${result.reason}. I did not send the recording because it did not meet the planned execution acceptance criteria.`,
+    isError: true,
+  };
+}
+
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
@@ -1944,6 +1983,7 @@ export async function runEmbeddedPiAgent(
       let reasoningOnlyRetryInstruction: string | null = null;
       let emptyResponseRetryInstruction: string | null = null;
       let toolIntentGuardrailRetryInstruction: string | null = null;
+      let plannedExecutionRetryInstruction: string | null = null;
       let nonAnswerRetryInstruction: string | null = null;
       let compactionContinuationRetryInstruction: string | null = null;
       let nextAttemptPromptOverride: string | null = null;
@@ -1964,6 +2004,8 @@ export async function runEmbeddedPiAgent(
       let emptyErrorRetries = 0;
       const MAX_NON_ANSWER_RETRIES = 1;
       let nonAnswerRetries = 0;
+      const MAX_PLANNED_EXECUTION_RECOVERY_RETRIES = 1;
+      let plannedExecutionRecoveryAttempts = 0;
       const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
       const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit(params.config);
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
@@ -2219,6 +2261,7 @@ export async function runEmbeddedPiAgent(
             planningOnlyRetryInstruction,
             reasoningOnlyRetryInstruction,
             emptyResponseRetryInstruction,
+            plannedExecutionRetryInstruction,
             toolIntentGuardrailRetryInstruction,
             nonAnswerRetryInstruction,
             compactionContinuationRetryInstruction,
@@ -3609,13 +3652,14 @@ export async function runEmbeddedPiAgent(
           const payloadAlreadyHasMedia = (payloadsWithToolMedia ?? []).some((payload) =>
             Boolean(payload.mediaUrl?.trim() || payload.mediaUrls?.some((url) => url.trim())),
           );
-          const plannedExecutionFinalizer =
+          let plannedExecutionFinalizer =
             attempt.didSendViaMessagingTool || payloadAlreadyHasMedia
               ? undefined
               : await resolvePlannedExecutionFinalizer({
                   plannedExecution: attempt.plannedExecution,
                 });
-          const plannedExecutionFinalizerApplied = plannedExecutionFinalizer?.ok === true;
+          let plannedExecutionFinalizerApplied = plannedExecutionFinalizer?.ok === true;
+          let plannedExecutionTerminalFailure = false;
           if (plannedExecutionFinalizer?.ok) {
             payloadsWithToolMedia = [plannedExecutionFinalizer.payload];
             agentMeta.plannedExecutionFinalizer = {
@@ -3639,7 +3683,88 @@ export async function runEmbeddedPiAgent(
             log.warn(
               `planned execution finalizer skipped: packet=${plannedExecutionFinalizer.packetId} jobId=${sanitizeForLog(plannedExecutionFinalizer.jobId ?? "")} reason=${sanitizeForLog(plannedExecutionFinalizer.reason)}`,
             );
+            if (isTerminalPlannedExecutionFailure(plannedExecutionFinalizer)) {
+              plannedExecutionTerminalFailure = true;
+              payloadsWithToolMedia = [
+                buildTerminalPlannedExecutionFailurePayload(plannedExecutionFinalizer),
+              ];
+            }
           }
+
+          const plannedExecutionNeedsCreateRequestRetry =
+            plannedExecutionFinalizer &&
+            !plannedExecutionFinalizer.ok &&
+            attempt.plannedExecution?.packetId === "godotRecording" &&
+            plannedExecutionFinalizer.reason === "status_not_done" &&
+            !attempt.toolMetas.some(
+              (entry) => entry.toolName.trim().toLowerCase() === "write",
+            );
+          if (
+            plannedExecutionNeedsCreateRequestRetry &&
+            plannedExecutionRecoveryAttempts < MAX_PLANNED_EXECUTION_RECOVERY_RETRIES
+          ) {
+            plannedExecutionRecoveryAttempts += 1;
+            plannedExecutionRetryInstruction = buildExecutionPhaseRetryInstruction("CREATE_REQUEST");
+            log.warn(
+              `planned execution did not create a request file: runId=${params.runId} sessionId=${params.sessionId} jobId=${sanitizeForLog(plannedExecutionFinalizer.jobId ?? "")} -- retrying ${plannedExecutionRecoveryAttempts}/${MAX_PLANNED_EXECUTION_RECOVERY_RETRIES} with CREATE_REQUEST correction`,
+            );
+            continue;
+          }
+          if (
+            plannedExecutionNeedsCreateRequestRetry &&
+            plannedExecutionRecoveryAttempts >= MAX_PLANNED_EXECUTION_RECOVERY_RETRIES &&
+            plannedExecutionFinalizer?.jobId
+          ) {
+            try {
+              const requestArtifact = await ensureGodotRecordingRequest({
+                jobId: plannedExecutionFinalizer.jobId,
+              });
+              log.warn(
+                `planned execution deterministically created missing Godot request: runId=${params.runId} sessionId=${params.sessionId} jobId=${sanitizeForLog(requestArtifact.jobId)} requestPath=${sanitizeForLog(requestArtifact.requestPath)}`,
+              );
+              plannedExecutionFinalizer = await resolvePlannedExecutionFinalizer({
+                plannedExecution: attempt.plannedExecution,
+              });
+              plannedExecutionFinalizerApplied = plannedExecutionFinalizer?.ok === true;
+              plannedExecutionTerminalFailure = false;
+              if (plannedExecutionFinalizer?.ok) {
+                payloadsWithToolMedia = [plannedExecutionFinalizer.payload];
+                agentMeta.plannedExecutionFinalizer = {
+                  applied: true,
+                  packetId: plannedExecutionFinalizer.packetId,
+                  jobId: plannedExecutionFinalizer.jobId,
+                  recordingPath: plannedExecutionFinalizer.recordingPath,
+                  durationSeconds: plannedExecutionFinalizer.probe.durationSeconds,
+                  averageFps: plannedExecutionFinalizer.probe.averageFps,
+                };
+                log.info(
+                  `planned execution finalizer applied after deterministic request creation: packet=${plannedExecutionFinalizer.packetId} jobId=${sanitizeForLog(plannedExecutionFinalizer.jobId)} recording=${sanitizeForLog(plannedExecutionFinalizer.recordingPath)}`,
+                );
+              } else if (plannedExecutionFinalizer) {
+                agentMeta.plannedExecutionFinalizer = {
+                  applied: false,
+                  packetId: plannedExecutionFinalizer.packetId,
+                  ...(plannedExecutionFinalizer.jobId ? { jobId: plannedExecutionFinalizer.jobId } : {}),
+                  reason: plannedExecutionFinalizer.reason,
+                };
+                log.warn(
+                  `planned execution finalizer skipped after deterministic request creation: packet=${plannedExecutionFinalizer.packetId} jobId=${sanitizeForLog(plannedExecutionFinalizer.jobId ?? "")} reason=${sanitizeForLog(plannedExecutionFinalizer.reason)}`,
+                );
+                if (isTerminalPlannedExecutionFailure(plannedExecutionFinalizer)) {
+                  plannedExecutionTerminalFailure = true;
+                  payloadsWithToolMedia = [
+                    buildTerminalPlannedExecutionFailurePayload(plannedExecutionFinalizer),
+                  ];
+                }
+              }
+            } catch (error) {
+              log.warn(
+                `planned execution deterministic request creation failed: runId=${params.runId} sessionId=${params.sessionId} jobId=${sanitizeForLog(plannedExecutionFinalizer.jobId)} error=${sanitizeForLog(error instanceof Error ? error.message : String(error))}`,
+              );
+            }
+          }
+          const plannedExecutionFinalizerConclusive =
+            plannedExecutionFinalizerApplied || plannedExecutionTerminalFailure;
 
           const timedOutDuringPrompt =
             timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution;
@@ -3848,6 +3973,7 @@ export async function runEmbeddedPiAgent(
             finalAssistantVisibleText ?? finalAssistantRawText
           )?.trim();
           const nonAnswerGuardrailTriggered =
+            !plannedExecutionFinalizerConclusive &&
             isToolIntentGuardrailEnabledForModel({
               config: toolIntentGuardrailConfig,
               provider: reportedModelRef.provider,
@@ -4407,7 +4533,7 @@ export async function runEmbeddedPiAgent(
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
             lastToolError: attempt.lastToolError,
           });
-          if (toolIntentGuardrailVerdict.trigger && !plannedExecutionFinalizerApplied) {
+          if (toolIntentGuardrailVerdict.trigger && !plannedExecutionFinalizerConclusive) {
             const toolIntentGuardrailReason = toolIntentGuardrailVerdict.reason
               ? ` reason=${sanitizeForLog(toolIntentGuardrailVerdict.reason)}`
               : "";

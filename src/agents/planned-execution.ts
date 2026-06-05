@@ -12,6 +12,17 @@ export type PlannedExecutionRewrite = {
   jobId?: string;
 };
 
+export type GodotRecordingRequestArtifact = {
+  jobId: string;
+  requestPath: string;
+  request: Record<string, unknown>;
+};
+
+const GODOT_RECORDING_PROJECT_PATH = "D:\\OpenClawWorkspace\\games\\roguelike_auto_chess_mvp";
+const GODOT_RECORDING_RECORD_SECONDS = 15;
+const GODOT_RECORDING_RECORD_FPS = 60;
+const GODOT_RECORDING_STARTUP_WAIT_SECONDS = 1;
+
 function wildcardPatternMatches(pattern: string, value: string): boolean {
   const escaped = pattern
     .trim()
@@ -98,17 +109,65 @@ export function looksLikeGodotRecordingExecutionRequest(prompt: string): boolean
   return mentionsGodot && mentionsAutoChess && asksRecording && (asksDelivery || asksRun);
 }
 
+export function buildGodotRecordingRequestArtifact(
+  jobId: string,
+  workspaceRoot = "/home/node/.openclaw/workspace",
+): GodotRecordingRequestArtifact {
+  const safeJobId = safeGodotRecordingJobId(jobId);
+  if (!safeJobId) {
+    throw new Error("Unsafe Godot recording job id");
+  }
+  const joinPath =
+    workspaceRoot.includes("\\") || /^[A-Za-z]:/u.test(workspaceRoot) ? path.join : path.posix.join;
+  return {
+    jobId: safeJobId,
+    requestPath: joinPath(workspaceRoot, "jobs", "game", "requests", `${safeJobId}.json`),
+    request: {
+      job_id: safeJobId,
+      action: "run_and_capture",
+      project_path: GODOT_RECORDING_PROJECT_PATH,
+      scene: "scenes/combat_sandbox.tscn",
+      wait_seconds: 6,
+      startup_wait_seconds: GODOT_RECORDING_STARTUP_WAIT_SECONDS,
+      record_seconds: GODOT_RECORDING_RECORD_SECONDS,
+      record_fps: GODOT_RECORDING_RECORD_FPS,
+      record_width: 1920,
+      record_height: 1080,
+      capture: {
+        video: true,
+        screenshot: false,
+        record_seconds: GODOT_RECORDING_RECORD_SECONDS,
+        fps: GODOT_RECORDING_RECORD_FPS,
+        width: 1920,
+        height: 1080,
+      },
+    },
+  };
+}
+
+export async function ensureGodotRecordingRequest(params: {
+  jobId: string;
+  workspaceRoot?: string;
+}): Promise<GodotRecordingRequestArtifact> {
+  const artifact = buildGodotRecordingRequestArtifact(params.jobId, params.workspaceRoot);
+  await fs.mkdir(path.dirname(artifact.requestPath), { recursive: true });
+  await fs.writeFile(artifact.requestPath, `${JSON.stringify(artifact.request, null, 2)}\n`, "utf8");
+  return artifact;
+}
+
 function buildGodotRecordingPacket(params: {
   originalPrompt: string;
   runId: string;
   messageChannel?: string;
 }): PlannedExecutionRewrite {
   const jobId = `qwen_planned_godot_recording_${sanitizeJobIdPart(params.runId) || "run"}`;
-  const requestPath = `/home/node/.openclaw/workspace/jobs/game/requests/${jobId}.json`;
+  const requestArtifact = buildGodotRecordingRequestArtifact(jobId);
+  const requestPath = requestArtifact.requestPath;
   const resultDir = `/home/node/.openclaw/workspace/jobs/game/results/${jobId}`;
   const statusPath = `${resultDir}/status.json`;
   const recordingPath = `${resultDir}/recording.mp4`;
   const probePath = `${resultDir}/video_probe.json`;
+  const requestJson = JSON.stringify(requestArtifact.request, null, 2);
   const prompt = `PLANNED_EXECUTION_PACKET
 packet_id: godotRecording
 role: executor
@@ -140,26 +199,7 @@ Current run identity:
 - Never list request_dir or result_dir to choose a job. Existing files or directories may belong to older runs.
 
 Request JSON to create exactly:
-{
-  "job_id": "${jobId}",
-  "action": "run_and_capture",
-  "project_path": "D:\\\\OpenClawWorkspace\\\\games\\\\roguelike_auto_chess_mvp",
-  "scene": "scenes/combat_sandbox.tscn",
-  "wait_seconds": 6,
-  "startup_wait_seconds": 6,
-  "record_seconds": 15,
-  "record_fps": 60,
-  "record_width": 1920,
-  "record_height": 1080,
-  "capture": {
-    "video": true,
-    "screenshot": false,
-    "record_seconds": 15,
-    "fps": 60,
-    "width": 1920,
-    "height": 1080
-  }
-}
+${requestJson}
 
 Exact JSON rules:
 - The request JSON above is authoritative. Do not retype path separators from memory.
@@ -254,6 +294,8 @@ export type PlannedExecutionFinalizerResult =
         durationSeconds: number;
         averageFps: number;
         frameCount?: number;
+        effectiveFps?: number;
+        effectiveFrameCount?: number;
       };
       payload: PlannedExecutionFinalizerPayload;
     }
@@ -267,6 +309,9 @@ export type PlannedExecutionFinalizerResult =
 const DEFAULT_PLANNED_EXECUTION_WORKSPACE_ROOT = "/home/node/.openclaw/workspace";
 const DEFAULT_GODOT_RECORDING_MIN_SECONDS = 14.5;
 const DEFAULT_GODOT_RECORDING_MIN_FPS = 55;
+const DEFAULT_GODOT_RECORDING_MIN_EFFECTIVE_FPS = 10;
+const DEFAULT_GODOT_RECORDING_WAIT_MS = 60_000;
+const DEFAULT_GODOT_RECORDING_POLL_INTERVAL_MS = 5_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -281,6 +326,20 @@ async function readJsonRecord(filePath: string): Promise<Record<string, unknown>
   }
 }
 
+async function readFirstJsonRecord(filePaths: string[]): Promise<Record<string, unknown> | undefined> {
+  for (const filePath of filePaths) {
+    const parsed = await readJsonRecord(filePath);
+    if (parsed) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -293,6 +352,159 @@ function safeGodotRecordingJobId(jobId: unknown): string | undefined {
   return normalized;
 }
 
+function validateGodotRecordingRequestRecord(params: {
+  request: Record<string, unknown> | undefined;
+  jobId: string;
+}): string | undefined {
+  const request = params.request;
+  if (!request) {
+    return "request_missing";
+  }
+  if (request.job_id !== params.jobId) {
+    return "request_job_id_mismatch";
+  }
+  if (request.project_path !== GODOT_RECORDING_PROJECT_PATH) {
+    return "request_project_path_mismatch";
+  }
+  if (request.startup_wait_seconds !== GODOT_RECORDING_STARTUP_WAIT_SECONDS) {
+    return "request_startup_wait_mismatch";
+  }
+  if (request.record_seconds !== GODOT_RECORDING_RECORD_SECONDS) {
+    return "request_record_seconds_mismatch";
+  }
+  if (request.record_fps !== GODOT_RECORDING_RECORD_FPS) {
+    return "request_record_fps_mismatch";
+  }
+  const capture = isRecord(request.capture) ? request.capture : undefined;
+  if (!capture) {
+    return "request_capture_missing";
+  }
+  if (capture.record_seconds !== GODOT_RECORDING_RECORD_SECONDS) {
+    return "request_capture_record_seconds_mismatch";
+  }
+  if (capture.fps !== GODOT_RECORDING_RECORD_FPS) {
+    return "request_capture_fps_mismatch";
+  }
+  return undefined;
+}
+
+async function resolveGodotRecordingFinalizerOnce(params: {
+  jobId: string;
+  resultDir: string;
+  statusPath: string;
+  requestPaths: string[];
+  probePath: string;
+  recordingPath: string;
+  minDurationSeconds: number;
+  minFps: number;
+  minEffectiveFps: number;
+}): Promise<PlannedExecutionFinalizerResult> {
+  const status = await readJsonRecord(params.statusPath);
+  if (status?.status !== "done") {
+    return {
+      ok: false,
+      packetId: "godotRecording",
+      jobId: params.jobId,
+      reason: "status_not_done",
+    };
+  }
+
+  const requestValidationReason = validateGodotRecordingRequestRecord({
+    request: await readFirstJsonRecord(params.requestPaths),
+    jobId: params.jobId,
+  });
+  if (requestValidationReason) {
+    return {
+      ok: false,
+      packetId: "godotRecording",
+      jobId: params.jobId,
+      reason: requestValidationReason,
+    };
+  }
+
+  const probeFile = await readJsonRecord(params.probePath);
+  const statusProbe = isRecord(status.video_probe) ? status.video_probe : undefined;
+  const probe = probeFile ?? statusProbe;
+  const durationSeconds = finiteNumber(probe?.duration_seconds);
+  const averageFps = finiteNumber(probe?.average_fps);
+  const frameCount = finiteNumber(probe?.frame_count);
+  const effectiveFps = finiteNumber(probe?.effective_fps);
+  const effectiveFrameCount = finiteNumber(probe?.effective_frame_count);
+  if (durationSeconds === undefined || averageFps === undefined) {
+    return {
+      ok: false,
+      packetId: "godotRecording",
+      jobId: params.jobId,
+      reason: "missing_video_probe",
+    };
+  }
+
+  if (durationSeconds < params.minDurationSeconds) {
+    return {
+      ok: false,
+      packetId: "godotRecording",
+      jobId: params.jobId,
+      reason: "recording_too_short",
+    };
+  }
+
+  if (averageFps < params.minFps) {
+    return {
+      ok: false,
+      packetId: "godotRecording",
+      jobId: params.jobId,
+      reason: "fps_too_low",
+    };
+  }
+
+  if (effectiveFps !== undefined && effectiveFps < params.minEffectiveFps) {
+    return {
+      ok: false,
+      packetId: "godotRecording",
+      jobId: params.jobId,
+      reason: "effective_fps_too_low",
+    };
+  }
+
+  try {
+    const recordingStat = await fs.stat(params.recordingPath);
+    if (!recordingStat.isFile() || recordingStat.size <= 0) {
+      return {
+        ok: false,
+        packetId: "godotRecording",
+        jobId: params.jobId,
+        reason: "recording_missing",
+      };
+    }
+  } catch {
+    return {
+      ok: false,
+      packetId: "godotRecording",
+      jobId: params.jobId,
+      reason: "recording_missing",
+    };
+  }
+
+  return {
+    ok: true,
+    packetId: "godotRecording",
+    jobId: params.jobId,
+    resultDir: params.resultDir,
+    recordingPath: params.recordingPath,
+    probe: {
+      durationSeconds,
+      averageFps,
+      ...(frameCount !== undefined ? { frameCount } : {}),
+      ...(effectiveFps !== undefined ? { effectiveFps } : {}),
+      ...(effectiveFrameCount !== undefined ? { effectiveFrameCount } : {}),
+    },
+    payload: {
+      text: `Here is the validated Godot gameplay recording (${durationSeconds.toFixed(1)}s at ${averageFps.toFixed(0)}fps).`,
+      mediaUrl: params.recordingPath,
+    },
+  };
+}
+
 export async function resolvePlannedExecutionFinalizer(params: {
   plannedExecution?: {
     packetId?: string;
@@ -301,6 +513,9 @@ export async function resolvePlannedExecutionFinalizer(params: {
   workspaceRoot?: string;
   minDurationSeconds?: number;
   minFps?: number;
+  minEffectiveFps?: number;
+  waitMs?: number;
+  pollIntervalMs?: number;
 }): Promise<PlannedExecutionFinalizerResult | undefined> {
   if (params.plannedExecution?.packetId !== "godotRecording") {
     return undefined;
@@ -314,60 +529,50 @@ export async function resolvePlannedExecutionFinalizer(params: {
   const workspaceRoot = params.workspaceRoot?.trim() || DEFAULT_PLANNED_EXECUTION_WORKSPACE_ROOT;
   const resultDir = path.join(workspaceRoot, "jobs", "game", "results", jobId);
   const statusPath = path.join(resultDir, "status.json");
+  const requestPaths = [
+    path.join(workspaceRoot, "jobs", "game", "requests_done", `${jobId}.json`),
+    path.join(workspaceRoot, "jobs", "game", "requests", `${jobId}.json`),
+  ];
   const probePath = path.join(resultDir, "video_probe.json");
   const recordingPath = path.join(resultDir, "recording.mp4");
-
-  const status = await readJsonRecord(statusPath);
-  if (status?.status !== "done") {
-    return { ok: false, packetId: "godotRecording", jobId, reason: "status_not_done" };
-  }
-
-  const probeFile = await readJsonRecord(probePath);
-  const statusProbe = isRecord(status.video_probe) ? status.video_probe : undefined;
-  const probe = probeFile ?? statusProbe;
-  const durationSeconds = finiteNumber(probe?.duration_seconds);
-  const averageFps = finiteNumber(probe?.average_fps);
-  const frameCount = finiteNumber(probe?.frame_count);
-  if (durationSeconds === undefined || averageFps === undefined) {
-    return { ok: false, packetId: "godotRecording", jobId, reason: "missing_video_probe" };
-  }
-
   const minDurationSeconds = params.minDurationSeconds ?? DEFAULT_GODOT_RECORDING_MIN_SECONDS;
-  if (durationSeconds < minDurationSeconds) {
-    return { ok: false, packetId: "godotRecording", jobId, reason: "recording_too_short" };
-  }
-
   const minFps = params.minFps ?? DEFAULT_GODOT_RECORDING_MIN_FPS;
-  if (averageFps < minFps) {
-    return { ok: false, packetId: "godotRecording", jobId, reason: "fps_too_low" };
-  }
+  const minEffectiveFps =
+    params.minEffectiveFps ?? DEFAULT_GODOT_RECORDING_MIN_EFFECTIVE_FPS;
+  const waitMs = Math.max(0, params.waitMs ?? DEFAULT_GODOT_RECORDING_WAIT_MS);
+  const pollIntervalMs = Math.max(
+    250,
+    params.pollIntervalMs ?? DEFAULT_GODOT_RECORDING_POLL_INTERVAL_MS,
+  );
+  const deadline = Date.now() + waitMs;
+  let lastResult: PlannedExecutionFinalizerResult | undefined;
 
-  try {
-    const recordingStat = await fs.stat(recordingPath);
-    if (!recordingStat.isFile() || recordingStat.size <= 0) {
-      return { ok: false, packetId: "godotRecording", jobId, reason: "recording_missing" };
+  while (true) {
+    lastResult = await resolveGodotRecordingFinalizerOnce({
+      jobId,
+      resultDir,
+      statusPath,
+      requestPaths,
+      probePath,
+      recordingPath,
+      minDurationSeconds,
+      minFps,
+      minEffectiveFps,
+    });
+    if (lastResult.ok) {
+      return lastResult;
     }
-  } catch {
-    return { ok: false, packetId: "godotRecording", jobId, reason: "recording_missing" };
+    if (lastResult.reason !== "status_not_done" && lastResult.reason !== "recording_missing") {
+      return lastResult;
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      return lastResult;
+    }
+    await sleep(Math.min(pollIntervalMs, remainingMs));
   }
-
-  return {
-    ok: true,
-    packetId: "godotRecording",
-    jobId,
-    resultDir,
-    recordingPath,
-    probe: {
-      durationSeconds,
-      averageFps,
-      ...(frameCount !== undefined ? { frameCount } : {}),
-    },
-    payload: {
-      text: `Here is the validated Godot gameplay recording (${durationSeconds.toFixed(1)}s at ${averageFps.toFixed(0)}fps).`,
-      mediaUrl: recordingPath,
-    },
-  };
 }
+
 export function resolvePlannedExecutionRewrite(params: {
   prompt: string;
   intentPrompt?: string;
@@ -378,6 +583,9 @@ export function resolvePlannedExecutionRewrite(params: {
   runId: string;
   messageChannel?: string;
 }): PlannedExecutionRewrite | undefined {
+  if (params.messageChannel === "heartbeat") {
+    return undefined;
+  }
   const modelRef =
     params.provider && params.modelId ? `${params.provider}/${params.modelId}` : params.modelId;
   if (
@@ -399,3 +607,4 @@ export function resolvePlannedExecutionRewrite(params: {
     messageChannel: params.messageChannel,
   });
 }
+
