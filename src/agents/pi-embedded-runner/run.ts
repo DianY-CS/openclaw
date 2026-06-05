@@ -2017,6 +2017,8 @@ export async function runEmbeddedPiAgent(
       let nonAnswerRetries = 0;
       const MAX_PLANNED_EXECUTION_RECOVERY_RETRIES = 1;
       let plannedExecutionRecoveryAttempts = 0;
+      const MAX_PLANNED_EXECUTION_SEND_RECOVERY_RETRIES = 1;
+      let plannedExecutionSendRecoveryAttempts = 0;
       const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
       const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit(params.config);
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
@@ -3673,9 +3675,24 @@ export async function runEmbeddedPiAgent(
               : await resolvePlannedExecutionFinalizer({
                   plannedExecution: attempt.plannedExecution,
                 });
-          let plannedExecutionFinalizerApplied = plannedExecutionFinalizer?.ok === true;
+          let plannedExecutionFinalizerApplied = false;
           let plannedExecutionTerminalFailure = false;
+          const plannedExecutionNeedsSendRecordingRetry =
+            plannedExecutionFinalizer?.ok === true &&
+            attempt.plannedExecution?.packetId === "godotRecording" &&
+            !attempt.didSendViaMessagingTool &&
+            !payloadAlreadyHasMedia &&
+            plannedExecutionSendRecoveryAttempts < MAX_PLANNED_EXECUTION_SEND_RECOVERY_RETRIES;
+          if (plannedExecutionNeedsSendRecordingRetry) {
+            plannedExecutionSendRecoveryAttempts += 1;
+            plannedExecutionRetryInstruction = buildExecutionPhaseRetryInstruction("SEND_RECORDING");
+            log.warn(
+              `planned execution recording is valid but not delivered: runId=${params.runId} sessionId=${params.sessionId} jobId=${sanitizeForLog(plannedExecutionFinalizer.jobId)} -- retrying ${plannedExecutionSendRecoveryAttempts}/${MAX_PLANNED_EXECUTION_SEND_RECOVERY_RETRIES} with SEND_RECORDING correction`,
+            );
+            continue;
+          }
           if (plannedExecutionFinalizer?.ok) {
+            plannedExecutionFinalizerApplied = true;
             payloadsWithToolMedia = [plannedExecutionFinalizer.payload];
             agentMeta.plannedExecutionFinalizer = {
               applied: true,
