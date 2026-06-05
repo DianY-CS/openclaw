@@ -77,8 +77,11 @@ describe("planned execution packet routing", () => {
     expect(rewrite?.prompt).toContain("Do not parallelize dependent steps");
     expect(rewrite?.prompt).toContain("skip phases that already have successful tool results");
     expect(rewrite?.prompt).toContain("resume at the first incomplete phase");
-    expect(rewrite?.prompt).toContain("wait 6 seconds and read the same status_path again");
-    expect(rewrite?.prompt).toContain("Repeat up to 8 polls");
+    expect(rewrite?.prompt).toContain(
+      "After request_path has been validated successfully, wait 20 seconds before the first status_path read",
+    );
+    expect(rewrite?.prompt).toContain("wait 5 seconds and read the same status_path again");
+    expect(rewrite?.prompt).toContain("Repeat up to 14 polls");
     expect(rewrite?.prompt).toContain("A directory-only command is not enough");
     expect(rewrite?.prompt).toContain("Never infer a job id from directory listings");
     expect(rewrite?.prompt).toContain(

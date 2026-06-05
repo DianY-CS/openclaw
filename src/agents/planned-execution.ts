@@ -253,6 +253,7 @@ Sequential tool protocol:
 - Never call a tool that reads or validates an artifact in the same assistant turn that creates that artifact.
 - In particular, do not read request_path until the create-request tool result has returned successfully.
 - Do not poll status_path until request_path has been created and read back successfully.
+- After request_path has been validated successfully, wait 20 seconds before the first status_path read.
 - Do not read probe_path until status_path says status is "done".
 - Do not send recording_path until probe_path has been read and validated.
 - If status_path or probe_path already proved that current_job_id is done and valid, the next incomplete step is SEND_RECORDING only.
@@ -263,7 +264,7 @@ Required order:
 1. PROJECT_EXISTS. Tool-call only. Verify project_godot exists.
 2. CREATE_REQUEST. Tool-call only. Create request_path with the exact JSON above. Prefer one command that creates the parent directory and writes the file. A directory-only command is not enough; this step is complete only after the write/create tool result says request_path was written successfully. Stop this turn after the create/write tool call.
 3. VALIDATE_REQUEST. Tool-call only. Read request_path back and validate it is JSON with top-level job_id=current_job_id, project_path exactly "D:\\OpenClawWorkspace\\games\\roguelike_auto_chess_mvp", record_seconds=15, record_fps=60, and capture.fps=60. If any field differs, rewrite request_path with the exact JSON above and stop. Do not poll status_path after a failed validation in the same turn.
-4. POLL_STATUS. Tool-call only. Read status_path. If status_path does not exist, wait 6 seconds and read the same status_path again. If status_path exists but status is not "done", wait 6 seconds and read the same status_path again. Repeat up to 8 polls. Stop polling immediately if status is "failed" or another clear failure appears. Do not use global file searches. Do not say "Now polling status"; read status_path with a tool call.
+4. POLL_STATUS. Tool-call only. First wait 20 seconds after successful VALIDATE_REQUEST, then read status_path. If status_path does not exist, wait 5 seconds and read the same status_path again. If status_path exists but status is not "done", wait 5 seconds and read the same status_path again. Repeat up to 14 polls. Stop polling immediately if status is "failed" or another clear failure appears. Do not use global file searches. Do not say "Now polling status"; read status_path with a tool call.
 5. VALIDATE_VIDEO. Tool-call only. Read probe_path. Success requires duration_seconds >= 14.5 and average_fps >= 55.
 6. SEND_RECORDING. Tool-call only. Send recording_path with the message tool using exactly: action "send", message "Here is the 15-second Godot gameplay recording.", filePath recording_path.
 7. FINAL. Final answer only after send evidence exists. Delivery evidence means a tool result with ok=true, sendVideo, deliveryKind=video, or messageId.
