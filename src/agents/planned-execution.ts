@@ -155,6 +155,38 @@ export async function ensureGodotRecordingRequest(params: {
   return artifact;
 }
 
+export async function canonicalizeExistingGodotRecordingRequestArtifacts(params: {
+  jobId: string;
+  workspaceRoot?: string;
+}): Promise<{
+  artifact: GodotRecordingRequestArtifact;
+  rewrittenPaths: string[];
+}> {
+  const workspaceRoot = params.workspaceRoot?.trim() || DEFAULT_PLANNED_EXECUTION_WORKSPACE_ROOT;
+  const artifact = buildGodotRecordingRequestArtifact(params.jobId, workspaceRoot);
+  const candidatePaths = [
+    path.join(workspaceRoot, "jobs", "game", "requests_done", `${artifact.jobId}.json`),
+    path.join(workspaceRoot, "jobs", "game", "requests", `${artifact.jobId}.json`),
+  ];
+  const rewrittenPaths: string[] = [];
+
+  for (const candidatePath of candidatePaths) {
+    try {
+      const stat = await fs.stat(candidatePath);
+      if (!stat.isFile()) {
+        continue;
+      }
+      await fs.writeFile(candidatePath, `${JSON.stringify(artifact.request, null, 2)}\n`, "utf8");
+      rewrittenPaths.push(candidatePath);
+    } catch {
+      // Missing artifacts are fine here. This helper only canonicalizes files
+      // that already exist for the current job; it does not create new work.
+    }
+  }
+
+  return { artifact, rewrittenPaths };
+}
+
 function buildGodotRecordingPacket(params: {
   originalPrompt: string;
   runId: string;
@@ -583,7 +615,7 @@ export function resolvePlannedExecutionRewrite(params: {
   runId: string;
   messageChannel?: string;
 }): PlannedExecutionRewrite | undefined {
-  if (params.messageChannel === "heartbeat") {
+  if (params.messageChannel?.trim().toLowerCase() === "heartbeat") {
     return undefined;
   }
   const modelRef =

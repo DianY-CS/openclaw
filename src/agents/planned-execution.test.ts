@@ -1,10 +1,11 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { describe, expect, it } from "vitest";
 import {
+  canonicalizeExistingGodotRecordingRequestArtifacts,
   looksLikeGodotRecordingExecutionRequest,
   resolvePlannedExecutionFinalizer,
   resolvePlannedExecutionRewrite,
@@ -322,6 +323,40 @@ describe("planned execution packet routing", () => {
       jobId: fixture.jobId,
       reason: "request_project_path_mismatch",
     });
+  });
+
+  it("canonicalizes existing Godot request artifacts before finalization", async () => {
+    const fixture = await writeGodotRecordingFixture({
+      requestPatch: {
+        project_path: "D:\\OpenClawWorkspace\\games/roguelike_auto_chess_mvp",
+      },
+    });
+    const requestDonePath = path.join(
+      fixture.workspaceRoot,
+      "jobs",
+      "game",
+      "requests_done",
+      `${fixture.jobId}.json`,
+    );
+
+    const canonicalized = await canonicalizeExistingGodotRecordingRequestArtifacts({
+      jobId: fixture.jobId,
+      workspaceRoot: fixture.workspaceRoot,
+    });
+
+    expect(canonicalized.rewrittenPaths).toEqual([requestDonePath]);
+    const rewritten = JSON.parse(await readFile(requestDonePath, "utf8"));
+    expect(rewritten.project_path).toBe("D:\\OpenClawWorkspace\\games\\roguelike_auto_chess_mvp");
+
+    const result = await resolvePlannedExecutionFinalizer({
+      plannedExecution: {
+        packetId: "godotRecording",
+        jobId: fixture.jobId,
+      },
+      workspaceRoot: fixture.workspaceRoot,
+    });
+
+    expect(result?.ok).toBe(true);
   });
 
   it("waits briefly for pending Godot recording results", async () => {

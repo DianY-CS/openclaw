@@ -46,6 +46,7 @@ import {
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
 import {
+  canonicalizeExistingGodotRecordingRequestArtifacts,
   ensureGodotRecordingRequest,
   resolvePlannedExecutionFinalizer,
 } from "../planned-execution.js";
@@ -1283,6 +1284,16 @@ const TERMINAL_PLANNED_EXECUTION_FAILURE_REASONS = new Set([
   "recording_too_short",
   "fps_too_low",
   "effective_fps_too_low",
+]);
+
+const CANONICALIZABLE_PLANNED_EXECUTION_REQUEST_REASONS = new Set([
+  "request_job_id_mismatch",
+  "request_project_path_mismatch",
+  "request_startup_wait_mismatch",
+  "request_record_seconds_mismatch",
+  "request_record_fps_mismatch",
+  "request_capture_record_seconds_mismatch",
+  "request_capture_fps_mismatch",
 ]);
 
 function isTerminalPlannedExecutionFailure(
@@ -3652,8 +3663,12 @@ export async function runEmbeddedPiAgent(
           const payloadAlreadyHasMedia = (payloadsWithToolMedia ?? []).some((payload) =>
             Boolean(payload.mediaUrl?.trim() || payload.mediaUrls?.some((url) => url.trim())),
           );
+          const plannedExecutionFinalizerAllowed =
+            params.trigger !== "heartbeat" && params.messageChannel !== "heartbeat";
           let plannedExecutionFinalizer =
-            attempt.didSendViaMessagingTool || payloadAlreadyHasMedia
+            !plannedExecutionFinalizerAllowed ||
+            attempt.didSendViaMessagingTool ||
+            payloadAlreadyHasMedia
               ? undefined
               : await resolvePlannedExecutionFinalizer({
                   plannedExecution: attempt.plannedExecution,
@@ -3683,6 +3698,58 @@ export async function runEmbeddedPiAgent(
             log.warn(
               `planned execution finalizer skipped: packet=${plannedExecutionFinalizer.packetId} jobId=${sanitizeForLog(plannedExecutionFinalizer.jobId ?? "")} reason=${sanitizeForLog(plannedExecutionFinalizer.reason)}`,
             );
+            if (
+              attempt.plannedExecution?.packetId === "godotRecording" &&
+              plannedExecutionFinalizer.jobId &&
+              CANONICALIZABLE_PLANNED_EXECUTION_REQUEST_REASONS.has(
+                plannedExecutionFinalizer.reason,
+              )
+            ) {
+              try {
+                const canonicalized = await canonicalizeExistingGodotRecordingRequestArtifacts({
+                  jobId: plannedExecutionFinalizer.jobId,
+                });
+                if (canonicalized.rewrittenPaths.length > 0) {
+                  log.warn(
+                    `planned execution canonicalized existing Godot request artifacts: runId=${params.runId} sessionId=${params.sessionId} jobId=${sanitizeForLog(canonicalized.artifact.jobId)} paths=${sanitizeForLog(canonicalized.rewrittenPaths.join(","))}`,
+                  );
+                  plannedExecutionFinalizer = await resolvePlannedExecutionFinalizer({
+                    plannedExecution: attempt.plannedExecution,
+                  });
+                  plannedExecutionFinalizerApplied = plannedExecutionFinalizer?.ok === true;
+                  if (plannedExecutionFinalizer?.ok) {
+                    payloadsWithToolMedia = [plannedExecutionFinalizer.payload];
+                    agentMeta.plannedExecutionFinalizer = {
+                      applied: true,
+                      packetId: plannedExecutionFinalizer.packetId,
+                      jobId: plannedExecutionFinalizer.jobId,
+                      recordingPath: plannedExecutionFinalizer.recordingPath,
+                      durationSeconds: plannedExecutionFinalizer.probe.durationSeconds,
+                      averageFps: plannedExecutionFinalizer.probe.averageFps,
+                    };
+                    log.info(
+                      `planned execution finalizer applied after request canonicalization: packet=${plannedExecutionFinalizer.packetId} jobId=${sanitizeForLog(plannedExecutionFinalizer.jobId)} recording=${sanitizeForLog(plannedExecutionFinalizer.recordingPath)}`,
+                    );
+                  } else if (plannedExecutionFinalizer) {
+                    agentMeta.plannedExecutionFinalizer = {
+                      applied: false,
+                      packetId: plannedExecutionFinalizer.packetId,
+                      ...(plannedExecutionFinalizer.jobId
+                        ? { jobId: plannedExecutionFinalizer.jobId }
+                        : {}),
+                      reason: plannedExecutionFinalizer.reason,
+                    };
+                    log.warn(
+                      `planned execution finalizer skipped after request canonicalization: packet=${plannedExecutionFinalizer.packetId} jobId=${sanitizeForLog(plannedExecutionFinalizer.jobId ?? "")} reason=${sanitizeForLog(plannedExecutionFinalizer.reason)}`,
+                    );
+                  }
+                }
+              } catch (error) {
+                log.warn(
+                  `planned execution request canonicalization failed: runId=${params.runId} sessionId=${params.sessionId} jobId=${sanitizeForLog(plannedExecutionFinalizer.jobId)} error=${sanitizeForLog(error instanceof Error ? error.message : String(error))}`,
+                );
+              }
+            }
             if (isTerminalPlannedExecutionFailure(plannedExecutionFinalizer)) {
               plannedExecutionTerminalFailure = true;
               payloadsWithToolMedia = [

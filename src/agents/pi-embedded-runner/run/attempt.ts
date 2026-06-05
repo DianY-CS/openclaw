@@ -3702,7 +3702,7 @@ export async function runEmbeddedAttempt(
               provider: params.provider,
               modelId: params.modelId,
               runId: params.runId,
-              messageChannel: params.messageChannel,
+              messageChannel: params.messageChannel ?? params.messageProvider,
             });
         if (plannedExecutionRewrite) {
           effectivePrompt = plannedExecutionRewrite.prompt;
