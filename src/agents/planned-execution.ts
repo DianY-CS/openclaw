@@ -85,6 +85,11 @@ function parseGodotRecordingSendOnlyRetryJobId(prompt: string): string | undefin
   return safeGodotRecordingJobId(match?.[1]);
 }
 
+function parseGodotRecordingCreateRequestOnlyRetryJobId(prompt: string): string | undefined {
+  const match = prompt.match(/\bPLANNED_EXECUTION_CREATE_REQUEST_ONLY_RETRY\s+job_id=([A-Za-z0-9_-]+)/u);
+  return safeGodotRecordingJobId(match?.[1]);
+}
+
 export function looksLikeGodotRecordingExecutionRequest(prompt: string): boolean {
   const text = normalizeForIntentMatch(prompt);
   if (!text) {
@@ -347,6 +352,43 @@ Invalid actions in this retry:
 - Any visible prose before the message tool call.
 
 After the message tool succeeds, output RESPONSE_MODE: final with one JSON object that includes status "done", job_id "${jobId}", recording_path "${recordingPath}", and telegram_delivery evidence.`;
+
+  return { packetId: "godotRecording", prompt, jobId };
+}
+
+function buildGodotRecordingCreateRequestOnlyPacket(params: {
+  jobId: string;
+}): PlannedExecutionRewrite | undefined {
+  const jobId = safeGodotRecordingJobId(params.jobId);
+  if (!jobId) {
+    return undefined;
+  }
+  const requestArtifact = buildGodotRecordingRequestArtifact(jobId);
+  const requestJson = JSON.stringify(requestArtifact.request, null, 2);
+  const prompt = `PLANNED_EXECUTION_PACKET
+packet_id: godotRecording
+role: executor
+mode: create_request_only
+
+The senior planner detected that the previous attempt did not create the Godot runner request file. Do not restart the full workflow. Do not validate, poll, execute, process, run Godot, or send a message.
+
+Current run identity:
+- current_job_id: ${jobId}
+- request_path: ${requestArtifact.requestPath}
+
+Request JSON to write exactly:
+${requestJson}
+
+Required single action:
+- Call the write/create-file tool to write exactly the JSON above to request_path.
+- Stop after the write/create-file tool result.
+
+Invalid actions in this retry:
+- Any read/exec/process/browser/search/message tool call.
+- Any request validation, status polling, video validation, or recording delivery.
+- Any visible prose before or after the write/create-file tool call.
+
+After the write/create-file tool succeeds, wait for the next planner/finalizer continuation.`;
 
   return { packetId: "godotRecording", prompt, jobId };
 }
@@ -669,6 +711,14 @@ export function resolvePlannedExecutionRewrite(params: {
   });
   if (!enabled) {
     return undefined;
+  }
+  const createRequestOnlyJobId = parseGodotRecordingCreateRequestOnlyRetryJobId(
+    [params.prompt, params.intentPrompt ?? ""].join("\n"),
+  );
+  if (createRequestOnlyJobId) {
+    return buildGodotRecordingCreateRequestOnlyPacket({
+      jobId: createRequestOnlyJobId,
+    });
   }
   const sendOnlyJobId = parseGodotRecordingSendOnlyRetryJobId(
     [params.prompt, params.intentPrompt ?? ""].join("\n"),

@@ -426,7 +426,7 @@ function buildExecutionPhaseRetryInstruction(phase: PlannedExecutionPhase | unde
     PROJECT_EXISTS:
       "FAILED_PHASE=PROJECT_EXISTS. Emit the filesystem/process tool call that verifies the fixed project_godot path exists. Do not output PROJECT_EXISTS, EXEC_PHASE, or any status text.",
     CREATE_REQUEST:
-      "FAILED_PHASE=CREATE_REQUEST. Emit the tool call that creates the fixed request_path with the exact request JSON from the planned execution packet. The tool call must create the parent directory if needed and write the file. Do not read, validate, poll, send, restart PROJECT_EXISTS, or output CREATE_REQUEST/EXEC_PHASE text.",
+      "FAILED_PHASE=CREATE_REQUEST. Emit only the write/create-file tool call that writes the fixed request_path with the exact request JSON from the planned execution packet. Do not read, validate, poll, send, exec, process, start Godot, restart PROJECT_EXISTS, or output CREATE_REQUEST/EXEC_PHASE text.",
     VALIDATE_REQUEST:
       "FAILED_PHASE=VALIDATE_REQUEST. Emit the tool call that reads the fixed request_path back and validates job_id, project_path, record_seconds, record_fps, and capture.fps. If a rewrite is needed, emit only the rewrite tool call. Do not poll status in this same turn and do not output VALIDATE_REQUEST/EXEC_PHASE text.",
     POLL_STATUS:
@@ -3791,7 +3791,10 @@ export async function runEmbeddedPiAgent(
             plannedExecutionRecoveryAttempts < MAX_PLANNED_EXECUTION_RECOVERY_RETRIES
           ) {
             plannedExecutionRecoveryAttempts += 1;
-            plannedExecutionRetryInstruction = buildExecutionPhaseRetryInstruction("CREATE_REQUEST");
+            plannedExecutionRetryInstruction = [
+              buildExecutionPhaseRetryInstruction("CREATE_REQUEST"),
+              `PLANNED_EXECUTION_CREATE_REQUEST_ONLY_RETRY job_id=${plannedExecutionFinalizer.jobId}`,
+            ].join("\n\n");
             log.warn(
               `planned execution did not create a request file: runId=${params.runId} sessionId=${params.sessionId} jobId=${sanitizeForLog(plannedExecutionFinalizer.jobId ?? "")} -- retrying ${plannedExecutionRecoveryAttempts}/${MAX_PLANNED_EXECUTION_RECOVERY_RETRIES} with CREATE_REQUEST correction`,
             );
