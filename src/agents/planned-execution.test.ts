@@ -478,6 +478,27 @@ describe("planned execution packet routing", () => {
     expect(result.payload.mediaUrl).toBe(path.join(resultDir, "recording.mp4"));
   });
 
+  it("reports status_not_done for an injected missing-request run", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-planned-exec-"));
+    const jobId = "qwen_planned_godot_recording_missing_request";
+
+    const result = await resolvePlannedExecutionFinalizer({
+      plannedExecution: {
+        packetId: "godotRecording",
+        jobId,
+      },
+      workspaceRoot,
+      waitMs: 0,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      packetId: "godotRecording",
+      jobId,
+      reason: "status_not_done",
+    });
+  });
+
   it("rejects unsafe Godot recording job ids", async () => {
     const result = await resolvePlannedExecutionFinalizer({
       plannedExecution: {

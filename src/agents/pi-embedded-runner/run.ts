@@ -48,6 +48,7 @@ import { isStrictAgenticExecutionContractActive } from "../execution-contract.js
 import {
   canonicalizeExistingGodotRecordingRequestArtifacts,
   ensureGodotRecordingRequest,
+  type PlannedExecutionFinalizerResult,
   resolvePlannedExecutionFinalizer,
 } from "../planned-execution.js";
 import {
@@ -1313,6 +1314,20 @@ function buildTerminalPlannedExecutionFailurePayload(
     text: `Godot recording validation failed${jobIdText}: ${result.reason}. I did not send the recording because it did not meet the planned execution acceptance criteria.`,
     isError: true,
   };
+}
+
+function shouldRetryPlannedExecutionCreateRequest(params: {
+  plannedExecution?: { packetId?: string };
+  plannedExecutionFinalizer?: PlannedExecutionFinalizerResult;
+  toolMetas?: Array<{ toolName: string }>;
+}): boolean {
+  return Boolean(
+    params.plannedExecutionFinalizer &&
+      !params.plannedExecutionFinalizer.ok &&
+      params.plannedExecution?.packetId === "godotRecording" &&
+      params.plannedExecutionFinalizer.reason === "status_not_done" &&
+      !params.toolMetas?.some((entry) => entry.toolName.trim().toLowerCase() === "write"),
+  );
 }
 
 export async function runEmbeddedPiAgent(
@@ -3779,13 +3794,11 @@ export async function runEmbeddedPiAgent(
           }
 
           const plannedExecutionNeedsCreateRequestRetry =
-            plannedExecutionFinalizer &&
-            !plannedExecutionFinalizer.ok &&
-            attempt.plannedExecution?.packetId === "godotRecording" &&
-            plannedExecutionFinalizer.reason === "status_not_done" &&
-            !attempt.toolMetas.some(
-              (entry) => entry.toolName.trim().toLowerCase() === "write",
-            );
+            shouldRetryPlannedExecutionCreateRequest({
+              plannedExecution: attempt.plannedExecution,
+              plannedExecutionFinalizer,
+              toolMetas: attempt.toolMetas,
+            });
           if (
             plannedExecutionNeedsCreateRequestRetry &&
             plannedExecutionRecoveryAttempts < MAX_PLANNED_EXECUTION_RECOVERY_RETRIES
@@ -4994,6 +5007,7 @@ const testing = {
   evaluateToolIntentGuardrail,
   resolveToolIntentGuardrailConfig,
   shouldUseToolIntentGuardrailFinalizationAfterToolProgress,
+  shouldRetryPlannedExecutionCreateRequest,
   shouldTriggerToolIntentGuardrail,
 };
 

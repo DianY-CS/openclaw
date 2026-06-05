@@ -15,6 +15,7 @@ const {
   looksLikeStructuredToolIntent,
   matchesModelPattern,
   resolveToolIntentGuardrailConfig,
+  shouldRetryPlannedExecutionCreateRequest,
   shouldUseToolIntentGuardrailFinalizationAfterToolProgress,
   shouldTriggerToolIntentGuardrail,
 } = __testing;
@@ -505,6 +506,42 @@ describe("embedded Pi tool-intent guardrail", () => {
         sawToolProgressAfterRetry: true,
       }),
     ).toBe(true);
+  });
+
+  it("injects create-request recovery only when a planned Godot run never wrote a request", () => {
+    const missingStatusResult = {
+      ok: false,
+      packetId: "godotRecording",
+      jobId: "qwen_planned_godot_recording_injected",
+      reason: "status_not_done",
+    } as const;
+
+    expect(
+      shouldRetryPlannedExecutionCreateRequest({
+        plannedExecution: { packetId: "godotRecording" },
+        plannedExecutionFinalizer: missingStatusResult,
+        toolMetas: [],
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldRetryPlannedExecutionCreateRequest({
+        plannedExecution: { packetId: "godotRecording" },
+        plannedExecutionFinalizer: missingStatusResult,
+        toolMetas: [{ toolName: "write" }],
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldRetryPlannedExecutionCreateRequest({
+        plannedExecution: { packetId: "godotRecording" },
+        plannedExecutionFinalizer: {
+          ...missingStatusResult,
+          reason: "request_missing",
+        },
+        toolMetas: [],
+      }),
+    ).toBe(false);
   });
 
   it("preserves a useful finalization candidate instead of replacing it with the conservative fallback", () => {
