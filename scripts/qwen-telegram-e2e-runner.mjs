@@ -9,6 +9,12 @@ const repoRoot = path.resolve(__dirname, "..");
 
 const DEFAULT_MODEL = "llamacpp/Qwen3.6-35B-A3B-APEX-I-Balanced.gguf";
 const DEFAULT_DRIVER = path.join(repoRoot, "scripts", "e2e", "telegram-user-driver.py");
+const DEFAULT_MTPROTO_DRIVER = path.join(
+  repoRoot,
+  "scripts",
+  "e2e",
+  "telegram-mtproto-driver.mjs",
+);
 const DEFAULT_TASK =
   "In my workspace, please find the Godot auto chess MVP project, run gameplay, record a 15-second 60fps video at 60 fps, validate the recording duration and fps, and send it to me.";
 
@@ -16,7 +22,7 @@ function usage() {
   return `Usage: node scripts/qwen-telegram-e2e-runner.mjs [options]
 
 Runs repeated real-Telegram E2E prompts against OpenClaw/Qwen using the existing
-scripts/e2e/telegram-user-driver.py real-user driver.
+scripts/e2e/telegram-user-driver.py real-user driver or the Node MTProto driver.
 
 Flow per run:
   1. send /new
@@ -28,8 +34,10 @@ Flow per run:
 Options:
   --runs <n>                         Number of runs (default: 5)
   --model <provider/model>           Model to select (default: ${DEFAULT_MODEL})
+  --driver-kind <tdlib|mtproto>      Driver runtime (default: tdlib)
   --driver <path>                    Telegram user-driver script (default: scripts/e2e/telegram-user-driver.py)
   --python <command>                 Python executable for the driver (default: PYTHON or python)
+  --node <command>                   Node executable for the MTProto driver (default: current node)
   --chat <chat>                      Chat id/title passed to telegram-user-driver.py
   --from-bot <username-or-id>         Expected bot sender for waits
   --run-prefix <prefix>              E2E_RUN_ID prefix (default: qwen-godot-telegram)
@@ -73,8 +81,10 @@ function parseArgs(argv) {
   const options = {
     runs: 5,
     model: DEFAULT_MODEL,
+    driverKind: "tdlib",
     driver: DEFAULT_DRIVER,
     python: process.env.PYTHON || "python",
+    node: process.execPath,
     chat: "",
     fromBot: "",
     runPrefix: "qwen-godot-telegram",
@@ -116,10 +126,18 @@ function parseArgs(argv) {
       options.runs = parsePositiveInteger(readValue(), "--runs");
     } else if (arg === "--model") {
       options.model = readValue();
+    } else if (arg === "--driver-kind") {
+      const value = readValue();
+      if (!["tdlib", "mtproto"].includes(value)) {
+        throw new Error(`--driver-kind must be tdlib or mtproto; got ${value}`);
+      }
+      options.driverKind = value;
     } else if (arg === "--driver") {
       options.driver = path.resolve(readValue());
     } else if (arg === "--python") {
       options.python = readValue();
+    } else if (arg === "--node") {
+      options.node = readValue();
     } else if (arg === "--chat") {
       options.chat = readValue();
     } else if (arg === "--from-bot") {
@@ -154,6 +172,10 @@ function parseArgs(argv) {
     } else {
       throw new Error(`unknown option: ${arg}`);
     }
+  }
+
+  if (options.driverKind === "mtproto" && options.driver === DEFAULT_DRIVER) {
+    options.driver = DEFAULT_MTPROTO_DRIVER;
   }
 
   return options;
@@ -220,28 +242,35 @@ function buildDriverArgs(options, command, extraArgs = []) {
   return args;
 }
 
+function buildDriverInvocation(options, command, extraArgs = []) {
+  const args = buildDriverArgs(options, command, extraArgs);
+  if (options.driverKind === "mtproto") {
+    return { command: options.node, args };
+  }
+  return { command: options.python, args };
+}
+
 async function driverSend(options, text) {
+  const invocation = buildDriverInvocation(options, "send", ["--text", text]);
   if (options.dryRun) {
     return {
       dryRun: true,
       text,
-      command: commandForDisplay(
-        options.python,
-        buildDriverArgs(options, "send", ["--text", text]),
-      ),
+      command: commandForDisplay(invocation.command, invocation.args),
     };
   }
-  return runCommand(options.python, buildDriverArgs(options, "send", ["--text", text]));
+  return runCommand(invocation.command, invocation.args);
 }
 
 async function driverWait(options, extraArgs = []) {
+  const invocation = buildDriverInvocation(options, "wait", extraArgs);
   if (options.dryRun) {
     return {
       dryRun: true,
-      command: commandForDisplay(options.python, buildDriverArgs(options, "wait", extraArgs)),
+      command: commandForDisplay(invocation.command, invocation.args),
     };
   }
-  return runCommand(options.python, buildDriverArgs(options, "wait", extraArgs));
+  return runCommand(invocation.command, invocation.args);
 }
 
 function appendFromBot(options, args) {
@@ -270,10 +299,15 @@ function parseDriverJson(result) {
   }
 }
 
-function inferEvidence(text) {
+function inferEvidence(text, parsed = null) {
   const lower = text.toLowerCase();
+  const message = parsed?.message || parsed?.reply || null;
+  const contentType = String(message?.contentType || "").toLowerCase();
+  const hasMedia = Boolean(message?.hasMedia);
   return {
     hasVideoSignal:
+      contentType === "video" ||
+      (hasMedia && lower.includes("video")) ||
       lower.includes("recording.mp4") ||
       lower.includes("video") ||
       lower.includes("sent") ||
@@ -294,28 +328,35 @@ async function waitForTaskProgress(options, runId, taskMessageId) {
   const startedAt = Date.now();
   let lastActivityAt = startedAt;
   let continuesSent = 0;
+  let cursorMessageId = Number(taskMessageId || 0);
 
   while (Date.now() - startedAt < options.taskTimeoutMs) {
     const waitArgs = appendFromBot(options, [
-      "--expect",
-      runId,
       "--after-message-id",
-      String(taskMessageId || 0),
+      String(cursorMessageId),
       "--timeout-ms",
       String(Math.min(options.timeoutMs, 60000)),
     ]);
+    if (options.driverKind !== "mtproto") {
+      waitArgs.push("--expect", runId);
+    }
     const waitResult = await driverWait(options, waitArgs);
     const text = collectText(waitResult);
+    const parsed = parseDriverJson(waitResult);
     if (!waitResult.failed) {
+      const messageId = Number(parsed?.message?.messageId || 0);
+      if (messageId > cursorMessageId) {
+        cursorMessageId = messageId;
+      }
+      const evidence = inferEvidence(text, parsed);
       observations.push({
         type: "reply",
         at: new Date().toISOString(),
         result: waitResult,
-        parsed: parseDriverJson(waitResult),
-        evidence: inferEvidence(text),
+        parsed,
+        evidence,
       });
       lastActivityAt = Date.now();
-      const evidence = inferEvidence(text);
       if (evidence.hasVideoSignal && !evidence.hasBlockedSignal) {
         break;
       }
@@ -407,6 +448,22 @@ async function runOne(options, index) {
     ...run.task.observations.map((item) => collectText(item.result)),
   ].join("\n");
   const evidence = inferEvidence(combinedText);
+  const observationEvidence = run.task.observations.reduce(
+    (accumulator, item) => ({
+      hasVideoSignal: accumulator.hasVideoSignal || Boolean(item.evidence?.hasVideoSignal),
+      hasGuardrailSignal:
+        accumulator.hasGuardrailSignal || Boolean(item.evidence?.hasGuardrailSignal),
+      hasBlockedSignal: accumulator.hasBlockedSignal || Boolean(item.evidence?.hasBlockedSignal),
+    }),
+    {
+      hasVideoSignal: false,
+      hasGuardrailSignal: false,
+      hasBlockedSignal: false,
+    },
+  );
+  evidence.hasVideoSignal ||= observationEvidence.hasVideoSignal;
+  evidence.hasGuardrailSignal ||= observationEvidence.hasGuardrailSignal;
+  evidence.hasBlockedSignal ||= observationEvidence.hasBlockedSignal;
   if (options.dryRun) {
     run.status = "dry-run";
   } else if (evidence.hasVideoSignal && !evidence.hasBlockedSignal) {
@@ -441,8 +498,10 @@ async function main() {
     options: {
       runs: options.runs,
       model: options.model,
+      driverKind: options.driverKind,
       driver: options.driver,
       python: options.python,
+      node: options.node,
       chat: options.chat ? "<configured>" : "",
       fromBot: options.fromBot,
       runPrefix: options.runPrefix,

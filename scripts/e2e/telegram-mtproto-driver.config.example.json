@@ -1,0 +1,8 @@
+{
+  "apiId": 123456,
+  "apiHash": "replace-with-my-telegram-org-api-hash",
+  "phoneNumber": "+15551234567",
+  "defaultChat": "@OpenClawBot",
+  "sutUsername": "OpenClawBot",
+  "sessionFile": "session.txt"
+}
