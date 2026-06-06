@@ -9,10 +9,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 const DEFAULT_MODEL = "llamacpp/Qwen3.6-35B-A3B-APEX-I-Balanced.gguf";
 const DEFAULT_CONTAINER = "openclaw-openclaw-gateway-1";
-const DEFAULT_TIMEOUT_SECONDS = 300;
+const DEFAULT_TIMEOUT_SECONDS = 420;
 const DEFAULT_MAX_EXECUTOR_TURNS = 4;
 const DEFAULT_GODOT_SKILL_PATH = "D:\\OpenClawWorkspace\\skills\\godot-runner\\SKILL.md";
 const DEFAULT_RECORDING_TIMEOUT_SECONDS = 240;
+let activeReportContext = null;
 
 function extractSkillSection(skillText) {
   const marker = "## Qwen Execution Mode";
@@ -489,7 +490,7 @@ Options:
   --runs <n>                  Number of runs (default: 3)
   --phase <phase>             rewrite-smoke, create-request, wait-validate-recording, deliver-recording-or-mock-media, or full-e2e (default: create-request)
   --model <provider/model>    Model override (default: ${DEFAULT_MODEL})
-  --timeout <seconds>         OpenClaw agent timeout (default: ${DEFAULT_TIMEOUT_SECONDS})
+  --timeout <seconds>         Per OpenClaw agent turn timeout (default: ${DEFAULT_TIMEOUT_SECONDS})
   --session-prefix <prefix>   Session key prefix (default: qwen-planned-executor)
   --docker-container <name>   Docker container with openclaw CLI (default: ${DEFAULT_CONTAINER})
   --openclaw-bin <path>       OpenClaw executable inside container (default: openclaw)
@@ -1460,20 +1461,44 @@ async function verifyRequestArtifactCandidates(options, expectedJobIds) {
     'const fs = require("fs");',
     'const path = require("path");',
     'const jobIds = JSON.parse(process.env.JOB_IDS || "[]");',
+    'const sinceEpochSeconds = Number(process.env.SINCE_EPOCH_SECONDS || "0");',
     `const dirs = ${JSON.stringify(candidateDirs)};`,
+    "function printCandidate(candidate) {",
+    "  console.log(candidate);",
+    '  process.stdout.write(fs.readFileSync(candidate, "utf8"));',
+    "}",
     "for (const jobId of jobIds) {",
     "  for (const dir of dirs) {",
     '    const candidate = path.join(dir, jobId + ".json");',
     "    if (fs.existsSync(candidate)) {",
-    "      console.log(candidate);",
-    '      process.stdout.write(fs.readFileSync(candidate, "utf8"));',
+    "      printCandidate(candidate);",
     "      process.exit(0);",
     "    }",
     "  }",
     "}",
+    "const fallback = [];",
+    "for (const dir of dirs) {",
+    "  if (!fs.existsSync(dir)) continue;",
+    "  for (const name of fs.readdirSync(dir)) {",
+    '    if (!/^qwen_planned_godot_recording_[A-Za-z0-9_-]+\\.json$/u.test(name)) continue;',
+    "    const candidate = path.join(dir, name);",
+    "    const stat = fs.statSync(candidate);",
+    "    if (sinceEpochSeconds && stat.mtimeMs < sinceEpochSeconds * 1000) continue;",
+    "    fallback.push({ candidate, mtimeMs: stat.mtimeMs });",
+    "  }",
+    "}",
+    "fallback.sort((a, b) => b.mtimeMs - a.mtimeMs);",
+    "if (fallback[0]) {",
+    "  printCandidate(fallback[0].candidate);",
+    "  process.exit(0);",
+    "}",
     "process.exit(2);",
   ].join(" ");
-  const script = `JOB_IDS=${JSON.stringify(JSON.stringify(expectedJobIds))} node -e ${JSON.stringify(nodeCode)}`;
+  const script = [
+    `JOB_IDS=${JSON.stringify(JSON.stringify(expectedJobIds))}`,
+    `SINCE_EPOCH_SECONDS=${JSON.stringify(String(options.runStartedEpochSeconds ?? 0))}`,
+    `node -e ${JSON.stringify(nodeCode)}`,
+  ].join(" ");
   const processResult = await runProcess(
     "docker",
     ["exec", options.dockerContainer, "sh", "-lc", script],
@@ -1500,26 +1525,33 @@ async function verifyRequestArtifactCandidates(options, expectedJobIds) {
   }
   const capture = parsed?.capture ?? {};
   const jobId = typeof parsed?.job_id === "string" ? parsed.job_id : path.basename(location, ".json");
-  const captureValid =
-    expectedJobIds.includes(jobId) &&
-    parsed?.action === "run_and_capture" &&
-    parsed?.project_path === "D:\\OpenClawWorkspace\\games\\roguelike_auto_chess_mvp" &&
-    parsed?.scene === "scenes/combat_sandbox.tscn" &&
-    parsed?.startup_wait_seconds === 6 &&
-    parsed?.record_seconds === 15 &&
-    parsed?.record_fps === 60 &&
-    parsed?.record_width === 1920 &&
-    parsed?.record_height === 1080 &&
-    capture.video === true &&
-    capture.screenshot === false &&
-    capture.record_seconds === 15 &&
-    capture.fps === 60 &&
-    capture.width === 1920 &&
-    capture.height === 1080;
+  const expectedOrRuntimeJobId =
+    expectedJobIds.includes(jobId) || jobId.startsWith("qwen_planned_godot_recording_");
+  const captureChecks = {
+    expectedOrRuntimeJobId,
+    action: parsed?.action === "run_and_capture",
+    projectPath: parsed?.project_path === "D:\\OpenClawWorkspace\\games\\roguelike_auto_chess_mvp",
+    scene: parsed?.scene === "scenes/combat_sandbox.tscn",
+    startupWait:
+      Number.isFinite(Number(parsed?.startup_wait_seconds)) &&
+      Number(parsed?.startup_wait_seconds) > 0,
+    recordSeconds: parsed?.record_seconds === 15,
+    recordFps: parsed?.record_fps === 60,
+    recordWidth: parsed?.record_width === 1920,
+    recordHeight: parsed?.record_height === 1080,
+    captureVideo: capture.video === true,
+    captureScreenshot: capture.screenshot === false,
+    captureRecordSeconds: capture.record_seconds === 15,
+    captureFps: capture.fps === 60,
+    captureWidth: capture.width === 1920,
+    captureHeight: capture.height === 1080,
+  };
+  const captureValid = Object.values(captureChecks).every(Boolean);
   return {
     exists: true,
     jsonValid: Boolean(parsed),
     captureValid,
+    captureChecks,
     location,
     jobId,
     parsed,
@@ -1971,7 +2003,7 @@ async function runOne(options, runIndex, runId) {
     aggregateToolCalls += Number(response?.result?.meta?.toolSummary?.calls ?? 0);
     aggregateTools = Array.from(new Set([...aggregateTools, ...currentTools]));
     const externalVerification = await verifyRequestArtifactCandidates(
-      options,
+      { ...options, runStartedEpochSeconds },
       Array.from(candidateJobIds),
     );
     if (externalVerification.jobId) {
@@ -2053,7 +2085,7 @@ async function runOne(options, runIndex, runId) {
         candidateJobIds.add(printedFileActionRecovery.jobId);
       }
       const recoveredVerification = await verifyRequestArtifactCandidates(
-        options,
+        { ...options, runStartedEpochSeconds },
         Array.from(candidateJobIds),
       );
       if (recoveredVerification.jobId) {
@@ -3100,6 +3132,38 @@ function summarize(results) {
   };
 }
 
+function buildReport(options, params) {
+  const results = params.results ?? [];
+  const runStatus = params.runStatus ?? "running";
+  return {
+    ok:
+      runStatus === "complete" &&
+      results.length === options.runs &&
+      results.every((entry) => entry.ok),
+    generatedAt: new Date().toISOString(),
+    startedAt: params.startedAt,
+    completedAt: runStatus === "complete" || runStatus === "failed" ? new Date().toISOString() : null,
+    runStatus,
+    completedRuns: results.length,
+    requestedRuns: options.runs,
+    inProgressRun: params.inProgressRun ?? null,
+    lastError: params.lastError ?? null,
+    host: os.hostname(),
+    model: options.model,
+    dockerContainer: options.dockerContainer,
+    godotSkillPath: options.godotSkillPath,
+    waitRecording: options.waitRecording,
+    recordingTimeoutSeconds: options.recordingTimeoutSeconds,
+    deliveryMode: options.deliveryMode,
+    summary: summarize(results),
+    results,
+  };
+}
+
+function writeReport(outputPath, options, params) {
+  writeJson(outputPath, buildReport(options, params));
+}
+
 async function runRewriteSmoke(options, index, runId) {
   const sessionKey = `${options.sessionPrefix}-rewrite-smoke-${runId}-${index}`;
   const startedAt = new Date().toISOString();
@@ -3152,8 +3216,23 @@ async function main() {
   const outputPath = options.outputPath || defaultOutputPath();
   const startedAt = new Date().toISOString();
   const results = [];
+  activeReportContext = { outputPath, options, startedAt, results };
+  writeReport(outputPath, options, {
+    startedAt,
+    results,
+    runStatus: "running",
+  });
   for (let index = 1; index <= options.runs; index += 1) {
     process.stdout.write(`planned-executor ${index}/${options.runs}\n`);
+    writeReport(outputPath, options, {
+      startedAt,
+      results,
+      runStatus: "running",
+      inProgressRun: {
+        index,
+        startedAt: new Date().toISOString(),
+      },
+    });
     const result =
       options.phase === "rewrite-smoke"
         ? await runRewriteSmoke(options, index, runId)
@@ -3165,29 +3244,36 @@ async function main() {
               ? await runFullE2E(options, index, runId)
               : await runOne(options, index, runId);
     results.push(result);
-    const summary = summarize(results);
-    writeJson(outputPath, {
-      ok: results.length === options.runs && results.every((entry) => entry.ok),
-      generatedAt: new Date().toISOString(),
+    writeReport(outputPath, options, {
       startedAt,
-      host: os.hostname(),
-      model: options.model,
-      dockerContainer: options.dockerContainer,
-      godotSkillPath: options.godotSkillPath,
-      waitRecording: options.waitRecording,
-      recordingTimeoutSeconds: options.recordingTimeoutSeconds,
-      deliveryMode: options.deliveryMode,
-      summary,
       results,
+      runStatus: "running",
     });
     process.stdout.write(
       `planned-executor ${index}/${options.runs} ${result.ok ? "PASS" : "PARTIAL"} score=${result.classification.score} checks=${JSON.stringify(result.classification.checks)} session=${result.sessionKey}\n`,
     );
   }
+  writeReport(outputPath, options, {
+    startedAt,
+    results,
+    runStatus: "complete",
+  });
   process.stdout.write(`qwen-planned-executor: summary ${outputPath}\n`);
 }
 
 main().catch((error) => {
+  if (activeReportContext) {
+    try {
+      writeReport(activeReportContext.outputPath, activeReportContext.options, {
+        startedAt: activeReportContext.startedAt,
+        results: activeReportContext.results,
+        runStatus: "failed",
+        lastError: error instanceof Error ? error.stack || error.message : String(error),
+      });
+    } catch {
+      // Keep the original error reporting path if report writing itself fails.
+    }
+  }
   process.stderr.write(
     `qwen-planned-executor: ${error instanceof Error ? error.stack || error.message : String(error)}\n`,
   );

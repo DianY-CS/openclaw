@@ -48,7 +48,6 @@ import { isStrictAgenticExecutionContractActive } from "../execution-contract.js
 import {
   canonicalizeExistingGodotRecordingRequestArtifacts,
   ensureGodotRecordingRequest,
-  type PlannedExecutionFinalizerResult,
   resolvePlannedExecutionFinalizer,
 } from "../planned-execution.js";
 import {
@@ -184,6 +183,16 @@ import {
 } from "./run/incomplete-turn.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
+import {
+  buildExecutionPhaseRetryInstruction,
+  buildTerminalPlannedExecutionFailurePayload,
+  isTerminalPlannedExecutionFailure,
+  PLANNED_EXECUTION_PHASES,
+  shouldEnterPlannedExecutionSendRecordingPhase,
+  shouldRetryPlannedExecutionCreateRequest,
+  shouldRetryPlannedExecutionSendRecording,
+  type PlannedExecutionPhase,
+} from "./run/planned-execution-control.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import {
   buildBeforeModelResolveAttachments,
@@ -371,8 +380,6 @@ const RESPONSE_MODE_PROTOCOL_INSTRUCTION =
   "Qwen response-mode protocol: when this turn asks for a conclusion, summary, final answer, root cause, or suggested fix, any visible non-tool answer must start with `RESPONSE_MODE: final`. In `RESPONSE_MODE: final`, do not promise more checking/reading/running/rewriting/sending. If more tool work is truly required, emit the tool call now; if you cannot emit a tool call, output `RESPONSE_MODE: tool_required` followed by ACTION_INTENT/type/action/reason.";
 const RESPONSE_MODE_RETRY_INSTRUCTION =
   "Response-mode correction: this turn requires a structured response mode. If you can answer from the transcript, start with `RESPONSE_MODE: final` and give the final answer without promising future tool work. If more tool work is required, emit the actual tool call now with no prose. If you cannot emit the tool call, output `RESPONSE_MODE: tool_required` followed by ACTION_INTENT/type/action/reason.";
-const EXECUTION_PHASE_RETRY_INSTRUCTION =
-  "Execution-phase correction: your previous assistant turn declared an execution phase but did not emit the required tool call. The phase label is useful state, but it is not a user-visible reply. Resume exactly at the declared phase and emit the required structured tool call now with no prose before or after. Do not restart earlier phases, do not infer a new job id from directory listings, and do not describe what you will do.";
 const USER_REQUESTS_FINALIZATION_PATTERNS = [
   /\b(?:conclusion|conclude|summary|summari[sz]e|final\s+(?:answer|result|report)|what\s+happened|what\s+went\s+wrong|root\s+cause|suggested\s+fix|modification\s+suggestion|recommend(?:ation|ed)?|next\s+change)\b/iu,
   /(?:\u7ed3\u8bba|\u603b\u7ed3|\u6536\u675f|\u6700\u540e|\u539f\u56e0|\u95ee\u9898\u5728\u54ea|\u4fee\u6539\u5efa\u8bae|\u5efa\u8bae|\u65b9\u6848|\u4e0b\u4e00\u6b65)/u,
@@ -407,43 +414,6 @@ const TOOL_COMPLETION_CLAIM_GUARDRAIL_PATTERNS = [
   /(?:^|[.!?\u3002\uff01\uff1f]\s*)(?:I(?:'|\u2019)?ve|I\s+have)\s+(?:created|written|dispatched|submitted|queued|sent|delivered|shared|uploaded)\b/iu,
   /(?:^|[.!?\u3002\uff01\uff1f]\s*)(?:\u8bf7\u6c42|\u4efb\u52a1|\u6587\u4ef6|\u5f55\u50cf|\u89c6\u9891|\u622a\u56fe|\u6d88\u606f)\s*(?:\u5df2|\u5df2\u7ecf)?\s*(?:\u521b\u5efa|\u5199\u5165|\u63d0\u4ea4|\u6d3e\u53d1|\u6392\u961f|\u53d1\u9001|\u4ea4\u4ed8|\u5206\u4eab|\u4e0a\u4f20)/iu,
 ] as const;
-const PLANNED_EXECUTION_PHASES = [
-  "PROJECT_EXISTS",
-  "CREATE_REQUEST",
-  "VALIDATE_REQUEST",
-  "POLL_STATUS",
-  "VALIDATE_VIDEO",
-  "SEND_RECORDING",
-  "FINAL",
-] as const;
-type PlannedExecutionPhase = (typeof PLANNED_EXECUTION_PHASES)[number];
-
-function buildExecutionPhaseRetryInstruction(phase: PlannedExecutionPhase | undefined): string {
-  if (!phase) {
-    return EXECUTION_PHASE_RETRY_INSTRUCTION;
-  }
-
-  const phaseInstructions: Record<PlannedExecutionPhase, string> = {
-    PROJECT_EXISTS:
-      "FAILED_PHASE=PROJECT_EXISTS. Emit the filesystem/process tool call that verifies the fixed project_godot path exists. Do not output PROJECT_EXISTS, EXEC_PHASE, or any status text.",
-    CREATE_REQUEST:
-      "FAILED_PHASE=CREATE_REQUEST. Emit only the write/create-file tool call that writes the fixed request_path with the exact request JSON from the planned execution packet. Do not read, validate, poll, send, exec, process, start Godot, restart PROJECT_EXISTS, or output CREATE_REQUEST/EXEC_PHASE text.",
-    VALIDATE_REQUEST:
-      "FAILED_PHASE=VALIDATE_REQUEST. Emit the tool call that reads the fixed request_path back and validates job_id, project_path, record_seconds, record_fps, and capture.fps. If a rewrite is needed, emit only the rewrite tool call. Do not poll status in this same turn and do not output VALIDATE_REQUEST/EXEC_PHASE text.",
-    POLL_STATUS:
-      "FAILED_PHASE=POLL_STATUS. Emit the tool call that reads the fixed status_path, or waits briefly then reads that same status_path. Do not list result directories, infer job ids, read probe_path, send video, or output POLL_STATUS/EXEC_PHASE text.",
-    VALIDATE_VIDEO:
-      "FAILED_PHASE=VALIDATE_VIDEO. Emit the tool call that reads the fixed probe_path and validates duration_seconds >= 14.5 and average_fps >= 55. Do not send the recording before this validation tool result and do not output VALIDATE_VIDEO/EXEC_PHASE text.",
-    SEND_RECORDING:
-      "FAILED_PHASE=SEND_RECORDING. Emit the message/send tool call using the fixed recording_path and the planned packet's exact delivery message. Do not restart earlier phases, do not revalidate files, and do not output SEND_RECORDING/EXEC_PHASE text.",
-    FINAL:
-      "FAILED_PHASE=FINAL. If delivery evidence already exists, output RESPONSE_MODE: final followed by the required JSON object. If delivery evidence does not exist, emit the missing SEND_RECORDING tool call now. Do not output FINAL/EXEC_PHASE text.",
-  };
-
-  return `${EXECUTION_PHASE_RETRY_INSTRUCTION}\n\n${phaseInstructions[phase]}`;
-}
-
-
 type ToolIntentGuardrailConfig = NonNullable<
   NonNullable<NonNullable<RunEmbeddedPiAgentParams["config"]>["agents"]>["defaults"]
 >["embeddedPi"] extends infer EmbeddedPi
@@ -1270,23 +1240,6 @@ function buildHandledReplyPayloads(reply?: ReplyPayload) {
   ];
 }
 
-const TERMINAL_PLANNED_EXECUTION_FAILURE_REASONS = new Set([
-  "missing_or_unsafe_job_id",
-  "missing_video_probe",
-  "request_missing",
-  "request_job_id_mismatch",
-  "request_project_path_mismatch",
-  "request_startup_wait_mismatch",
-  "request_record_seconds_mismatch",
-  "request_record_fps_mismatch",
-  "request_capture_missing",
-  "request_capture_record_seconds_mismatch",
-  "request_capture_fps_mismatch",
-  "recording_too_short",
-  "fps_too_low",
-  "effective_fps_too_low",
-]);
-
 const CANONICALIZABLE_PLANNED_EXECUTION_REQUEST_REASONS = new Set([
   "request_job_id_mismatch",
   "request_project_path_mismatch",
@@ -1296,39 +1249,6 @@ const CANONICALIZABLE_PLANNED_EXECUTION_REQUEST_REASONS = new Set([
   "request_capture_record_seconds_mismatch",
   "request_capture_fps_mismatch",
 ]);
-
-function isTerminalPlannedExecutionFailure(
-  result: Awaited<ReturnType<typeof resolvePlannedExecutionFinalizer>>,
-): result is Extract<
-  NonNullable<Awaited<ReturnType<typeof resolvePlannedExecutionFinalizer>>>,
-  { ok: false }
-> {
-  return Boolean(result && !result.ok && TERMINAL_PLANNED_EXECUTION_FAILURE_REASONS.has(result.reason));
-}
-
-function buildTerminalPlannedExecutionFailurePayload(
-  result: Extract<NonNullable<Awaited<ReturnType<typeof resolvePlannedExecutionFinalizer>>>, { ok: false }>,
-): ReplyPayload {
-  const jobIdText = result.jobId ? ` job_id=${result.jobId}` : "";
-  return {
-    text: `Godot recording validation failed${jobIdText}: ${result.reason}. I did not send the recording because it did not meet the planned execution acceptance criteria.`,
-    isError: true,
-  };
-}
-
-function shouldRetryPlannedExecutionCreateRequest(params: {
-  plannedExecution?: { packetId?: string };
-  plannedExecutionFinalizer?: PlannedExecutionFinalizerResult;
-  toolMetas?: Array<{ toolName: string }>;
-}): boolean {
-  return Boolean(
-    params.plannedExecutionFinalizer &&
-      !params.plannedExecutionFinalizer.ok &&
-      params.plannedExecution?.packetId === "godotRecording" &&
-      params.plannedExecutionFinalizer.reason === "status_not_done" &&
-      !params.toolMetas?.some((entry) => entry.toolName.trim().toLowerCase() === "write"),
-  );
-}
 
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
@@ -3695,11 +3615,14 @@ export async function runEmbeddedPiAgent(
           let plannedExecutionFinalizerApplied = false;
           let plannedExecutionTerminalFailure = false;
           const plannedExecutionNeedsSendRecordingPhase =
-            plannedExecutionFinalizer?.ok === true &&
-            attempt.plannedExecution?.packetId === "godotRecording" &&
-            !attempt.didSendViaMessagingTool &&
-            !payloadAlreadyHasMedia &&
-            plannedExecutionSendPhaseAttempts < MAX_PLANNED_EXECUTION_SEND_PHASE_ATTEMPTS;
+            shouldEnterPlannedExecutionSendRecordingPhase({
+              plannedExecution: attempt.plannedExecution,
+              plannedExecutionFinalizer,
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              payloadAlreadyHasMedia,
+              attempts: plannedExecutionSendPhaseAttempts,
+              maxAttempts: MAX_PLANNED_EXECUTION_SEND_PHASE_ATTEMPTS,
+            });
           if (plannedExecutionNeedsSendRecordingPhase) {
             plannedExecutionSendPhaseAttempts += 1;
             plannedExecutionRetryInstruction = [
@@ -3712,11 +3635,14 @@ export async function runEmbeddedPiAgent(
             continue;
           }
           const plannedExecutionNeedsSendRecordingRetry =
-            plannedExecutionFinalizer?.ok === true &&
-            attempt.plannedExecution?.packetId === "godotRecording" &&
-            !attempt.didSendViaMessagingTool &&
-            !payloadAlreadyHasMedia &&
-            plannedExecutionSendRecoveryAttempts < MAX_PLANNED_EXECUTION_SEND_RECOVERY_RETRIES;
+            shouldRetryPlannedExecutionSendRecording({
+              plannedExecution: attempt.plannedExecution,
+              plannedExecutionFinalizer,
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              payloadAlreadyHasMedia,
+              attempts: plannedExecutionSendRecoveryAttempts,
+              maxAttempts: MAX_PLANNED_EXECUTION_SEND_RECOVERY_RETRIES,
+            });
           if (plannedExecutionNeedsSendRecordingRetry) {
             plannedExecutionSendRecoveryAttempts += 1;
             plannedExecutionRetryInstruction = [
