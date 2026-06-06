@@ -111,13 +111,11 @@ USER.md
 .antigravitycli/
 .serena/
 .crabbox/
+# Telegram local user-driver secrets and sessions (NEVER COMMIT)
 scripts/user-driver/config.local.json
 scripts/e2e/telegram-mtproto-driver/
 scripts/e2e/telegram-mtproto-driver.local.json
 scripts/e2e/telegram-mtproto-session*.txt
-docs/specs/qwen-runtime-extension-structure.md
-src/agents/pi-embedded-runner/run/planned-execution-control.ts
-src/agents/pi-embedded-runner/run/planned-execution-control.test.ts
 
 # local QA evidence mirrors; CI publishes canonical Mantis files as Actions artifacts
 mantis/
