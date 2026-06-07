@@ -1,5 +1,6 @@
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { PlannedExecutionFinalizerResult } from "../../planned-execution.js";
+import { shouldAttemptArtifactDelivery } from "../../planned-execution/delivery.js";
 
 export const PLANNED_EXECUTION_PHASES = [
   "PROJECT_EXISTS",
@@ -98,12 +99,17 @@ export function shouldEnterPlannedExecutionSendRecordingPhase(params: {
   attempts: number;
   maxAttempts: number;
 }): boolean {
-  return Boolean(
-    params.plannedExecutionFinalizer?.ok === true &&
-      params.plannedExecution?.packetId === "godotRecording" &&
-      !params.didSendViaMessagingTool &&
-      !params.payloadAlreadyHasMedia &&
-      params.attempts < params.maxAttempts,
+  return (
+    params.plannedExecution?.packetId === "godotRecording" &&
+    shouldAttemptArtifactDelivery({
+      artifactAccepted: params.plannedExecutionFinalizer?.ok === true,
+      deliveryState: {
+        didSendViaMessagingTool: params.didSendViaMessagingTool,
+        payloadAlreadyHasMedia: params.payloadAlreadyHasMedia,
+      },
+      attempts: params.attempts,
+      maxAttempts: params.maxAttempts,
+    })
   );
 }
 

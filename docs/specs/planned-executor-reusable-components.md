@@ -198,6 +198,10 @@ Recommended modules:
   - planned job, artifact, criteria, validation, and delivery evidence types
   - pure validation helpers
 
+- `src/agents/planned-execution/delivery.ts`
+  - artifact delivery request/evidence helpers
+  - pure delivery attempt and evidence classification
+
 - `src/agents/planned-execution/phases.ts`
   - generic phase names, aliases, and phase decision helpers
 
