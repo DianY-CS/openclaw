@@ -323,14 +323,21 @@ function hasTelegramDeliveryEvidence(parsed) {
   );
 }
 
-function inferEvidence(text, parsed = null) {
+export function isTelegramVideoContentType(contentType) {
+  const normalized = String(contentType || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/gu, "");
+  return normalized === "video" || normalized === "messagevideo";
+}
+
+export function inferEvidence(text, parsed = null) {
   const lower = text.toLowerCase();
   const message = parsed?.message || parsed?.reply || null;
-  const contentType = String(message?.contentType || "").toLowerCase();
-  const hasMedia = Boolean(message?.hasMedia);
+  const hasVideoContentType = isTelegramVideoContentType(message?.contentType);
   const hasDeliveryEvidence = hasTelegramDeliveryEvidence(parsed);
   return {
-    hasVideoSignal: contentType === "video" || hasMedia || hasDeliveryEvidence,
+    hasVideoSignal: hasVideoContentType,
     hasDeliveryEvidence,
     hasGuardrailSignal: lower.includes("guardrail") || lower.includes("tool-intent"),
     hasBlockedSignal:
@@ -558,7 +565,9 @@ async function main() {
   process.stdout.write(`${JSON.stringify(report.summary, null, 2)}\n`);
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.stack || error.message : String(error)}\n`);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.stack || error.message : String(error)}\n`);
+    process.exit(1);
+  });
+}
