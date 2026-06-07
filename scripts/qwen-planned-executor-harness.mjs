@@ -1120,7 +1120,42 @@ function classifyWaitValidateRecording(response, processResult, expectedJobId, r
   };
 }
 
-function classifyMockMediaDelivery(
+export function classifyMockMediaDeliveryEvidence({
+  expectedJobId,
+  finalJson,
+  recordingResult,
+  receipt,
+  validation,
+}) {
+  const receiptPath = `/home/node/.openclaw/workspace/jobs/mock_media_deliveries/${expectedJobId}.json`;
+  const checks = {
+    expectedJobId: finalJson?.job_id === expectedJobId,
+    mockReceiptPathOk: finalJson?.mock_delivery_receipt === receiptPath,
+    receiptExists: receipt?.exists === true,
+    receiptJsonValid: receipt?.jsonValid === true,
+    contractOk: validation?.ok === true,
+    actionOk: validation?.checks?.actionOk === true,
+    mediaPathOk: validation?.checks?.mediaPathOk === true,
+    mimeTypeOk: validation?.checks?.mimeTypeOk === true,
+    captionOk: validation?.checks?.captionOk === true,
+    validationOk: validation?.checks?.validationOk === true,
+    actualVideoValid: recordingResult?.video_valid === true,
+  };
+  return {
+    ok:
+      checks.expectedJobId &&
+      checks.mockReceiptPathOk &&
+      checks.receiptExists &&
+      checks.receiptJsonValid &&
+      checks.contractOk &&
+      checks.actualVideoValid,
+    artifactOk: checks.receiptExists && checks.receiptJsonValid && checks.contractOk,
+    receiptPath,
+    checks,
+  };
+}
+
+export function classifyMockMediaDelivery(
   response,
   processResult,
   expectedJobId,
@@ -1139,7 +1174,13 @@ function classifyMockMediaDelivery(
   const timedOut = processResult.timedOut === true;
   const rawGuardrailVisible = lower.includes("tool-intent guardrail:");
   const unresolvedToolIntent = looksLikeUnresolvedToolIntent(text);
-  const receiptPath = `/home/node/.openclaw/workspace/jobs/mock_media_deliveries/${expectedJobId}.json`;
+  const deliveryEvidence = classifyMockMediaDeliveryEvidence({
+    expectedJobId,
+    finalJson,
+    recordingResult,
+    receipt,
+    validation,
+  });
   const checks = {
     statusOk,
     timedOut,
@@ -1155,20 +1196,10 @@ function classifyMockMediaDelivery(
     unresolvedToolIntent,
     finalJsonValid: Boolean(finalJson),
     statusDone: finalJson?.status === "done",
-    expectedJobId: finalJson?.job_id === expectedJobId,
-    mockReceiptPathOk: finalJson?.mock_delivery_receipt === receiptPath,
-    receiptExists: receipt?.exists === true,
-    receiptJsonValid: receipt?.jsonValid === true,
-    contractOk: validation?.ok === true,
-    actionOk: validation?.checks?.actionOk === true,
-    mediaPathOk: validation?.checks?.mediaPathOk === true,
-    mimeTypeOk: validation?.checks?.mimeTypeOk === true,
-    captionOk: validation?.checks?.captionOk === true,
-    validationOk: validation?.checks?.validationOk === true,
-    actualVideoValid: recordingResult.video_valid === true,
-    externalArtifactExists: receipt?.exists === true,
-    externalJsonValid: receipt?.jsonValid === true,
-    externalCaptureValid: validation?.ok === true,
+    ...deliveryEvidence.checks,
+    externalArtifactExists: deliveryEvidence.checks.receiptExists,
+    externalJsonValid: deliveryEvidence.checks.receiptJsonValid,
+    externalCaptureValid: deliveryEvidence.checks.contractOk,
     noFuturePromise: !unresolvedToolIntent,
   };
   let score = 0;
@@ -1202,18 +1233,16 @@ function classifyMockMediaDelivery(
     checks.statusDone &&
     checks.expectedJobId &&
     checks.mockReceiptPathOk &&
-    checks.receiptExists &&
-    checks.receiptJsonValid &&
-    checks.contractOk &&
-    checks.actualVideoValid &&
+    deliveryEvidence.ok &&
     !checks.rawGuardrailVisible &&
     !checks.unresolvedToolIntent;
   return {
     ok,
-    artifactOk: checks.receiptExists && checks.receiptJsonValid && checks.contractOk,
+    artifactOk: deliveryEvidence.artifactOk,
     score,
     grade: score >= 90 ? "strong" : score >= 80 ? "pass" : score >= 55 ? "partial" : "weak",
     checks,
+    deliveryEvidence,
     finalJson,
     payloadText: text.slice(0, 8000),
     executionTrace: meta.executionTrace,
@@ -1689,7 +1718,7 @@ async function waitForRecordingResult(options, expectedJobId) {
   };
 }
 
-function validateMockMediaContract(contract, recordingResult, expectedJobId) {
+export function validateMockMediaContract(contract, recordingResult, expectedJobId) {
   const mediaPathOk =
     typeof contract?.media?.path === "string" &&
     contract.media.path === recordingResult.recording_path &&
@@ -3261,21 +3290,23 @@ async function main() {
   process.stdout.write(`qwen-planned-executor: summary ${outputPath}\n`);
 }
 
-main().catch((error) => {
-  if (activeReportContext) {
-    try {
-      writeReport(activeReportContext.outputPath, activeReportContext.options, {
-        startedAt: activeReportContext.startedAt,
-        results: activeReportContext.results,
-        runStatus: "failed",
-        lastError: error instanceof Error ? error.stack || error.message : String(error),
-      });
-    } catch {
-      // Keep the original error reporting path if report writing itself fails.
+if (import.meta.main) {
+  main().catch((error) => {
+    if (activeReportContext) {
+      try {
+        writeReport(activeReportContext.outputPath, activeReportContext.options, {
+          startedAt: activeReportContext.startedAt,
+          results: activeReportContext.results,
+          runStatus: "failed",
+          lastError: error instanceof Error ? error.stack || error.message : String(error),
+        });
+      } catch {
+        // Keep the original error reporting path if report writing itself fails.
+      }
     }
-  }
-  process.stderr.write(
-    `qwen-planned-executor: ${error instanceof Error ? error.stack || error.message : String(error)}\n`,
-  );
-  process.exit(1);
-});
+    process.stderr.write(
+      `qwen-planned-executor: ${error instanceof Error ? error.stack || error.message : String(error)}\n`,
+    );
+    process.exit(1);
+  });
+}
