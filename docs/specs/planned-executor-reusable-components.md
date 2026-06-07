@@ -204,6 +204,8 @@ Recommended modules:
 
 - `src/agents/planned-execution/phases.ts`
   - generic phase names, aliases, and phase decision helpers
+  - compatibility mapping from Godot labels such as `SEND_RECORDING` to generic
+    phases such as `DELIVER_ARTIFACT`
 
 - `src/agents/planned-execution/godot-recording.ts`
   - Godot-specific packet construction

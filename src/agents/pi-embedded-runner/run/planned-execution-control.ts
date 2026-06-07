@@ -1,18 +1,9 @@
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { PlannedExecutionFinalizerResult } from "../../planned-execution.js";
 import { shouldAttemptArtifactDelivery } from "../../planned-execution/delivery.js";
-
-export const PLANNED_EXECUTION_PHASES = [
-  "PROJECT_EXISTS",
-  "CREATE_REQUEST",
-  "VALIDATE_REQUEST",
-  "POLL_STATUS",
-  "VALIDATE_VIDEO",
-  "SEND_RECORDING",
-  "FINAL",
-] as const;
-
-export type PlannedExecutionPhase = (typeof PLANNED_EXECUTION_PHASES)[number];
+import type { PlannedExecutionPhase } from "../../planned-execution/phases.js";
+export { PLANNED_EXECUTION_PHASES } from "../../planned-execution/phases.js";
+export type { PlannedExecutionPhase } from "../../planned-execution/phases.js";
 
 export const EXECUTION_PHASE_RETRY_INSTRUCTION =
   "Execution-phase correction: your previous assistant turn declared an execution phase but did not emit the required tool call. The phase label is useful state, but it is not a user-visible reply. Resume exactly at the declared phase and emit the required structured tool call now with no prose before or after. Do not restart earlier phases, do not infer a new job id from directory listings, and do not describe what you will do.";
