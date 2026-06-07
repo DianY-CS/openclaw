@@ -299,19 +299,39 @@ function parseDriverJson(result) {
   }
 }
 
+function parseJsonObject(text) {
+  if (!text || typeof text !== "string") {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function hasTelegramDeliveryEvidence(parsed) {
+  const message = parsed?.message || parsed?.reply || null;
+  const payload = parseJsonObject(message?.text);
+  const delivery = payload?.telegram_delivery;
+  return Boolean(
+    delivery &&
+      typeof delivery === "object" &&
+      delivery.ok === true &&
+      (delivery.messageId || delivery.message_id),
+  );
+}
+
 function inferEvidence(text, parsed = null) {
   const lower = text.toLowerCase();
   const message = parsed?.message || parsed?.reply || null;
   const contentType = String(message?.contentType || "").toLowerCase();
   const hasMedia = Boolean(message?.hasMedia);
+  const hasDeliveryEvidence = hasTelegramDeliveryEvidence(parsed);
   return {
-    hasVideoSignal:
-      contentType === "video" ||
-      (hasMedia && lower.includes("video")) ||
-      lower.includes("recording.mp4") ||
-      lower.includes("video") ||
-      lower.includes("sent") ||
-      lower.includes("发送"),
+    hasVideoSignal: contentType === "video" || hasMedia || hasDeliveryEvidence,
+    hasDeliveryEvidence,
     hasGuardrailSignal: lower.includes("guardrail") || lower.includes("tool-intent"),
     hasBlockedSignal:
       lower.includes("blocked") ||
@@ -358,9 +378,6 @@ async function waitForTaskProgress(options, runId, taskMessageId) {
       });
       lastActivityAt = Date.now();
       if (evidence.hasVideoSignal && !evidence.hasBlockedSignal) {
-        break;
-      }
-      if (text.includes("RESPONSE_MODE") || text.includes('"status"')) {
         break;
       }
     } else {
@@ -451,17 +468,21 @@ async function runOne(options, index) {
   const observationEvidence = run.task.observations.reduce(
     (accumulator, item) => ({
       hasVideoSignal: accumulator.hasVideoSignal || Boolean(item.evidence?.hasVideoSignal),
+      hasDeliveryEvidence:
+        accumulator.hasDeliveryEvidence || Boolean(item.evidence?.hasDeliveryEvidence),
       hasGuardrailSignal:
         accumulator.hasGuardrailSignal || Boolean(item.evidence?.hasGuardrailSignal),
       hasBlockedSignal: accumulator.hasBlockedSignal || Boolean(item.evidence?.hasBlockedSignal),
     }),
     {
       hasVideoSignal: false,
+      hasDeliveryEvidence: false,
       hasGuardrailSignal: false,
       hasBlockedSignal: false,
     },
   );
   evidence.hasVideoSignal ||= observationEvidence.hasVideoSignal;
+  evidence.hasDeliveryEvidence ||= observationEvidence.hasDeliveryEvidence;
   evidence.hasGuardrailSignal ||= observationEvidence.hasGuardrailSignal;
   evidence.hasBlockedSignal ||= observationEvidence.hasBlockedSignal;
   if (options.dryRun) {
