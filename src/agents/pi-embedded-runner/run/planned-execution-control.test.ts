@@ -56,6 +56,30 @@ describe("planned execution control", () => {
         attempts: 0,
         maxAttempts: 1,
       }),
+    ).toBe(true);
+
+    expect(
+      shouldEnterPlannedExecutionSendRecordingPhase({
+        plannedExecution: { packetId: "godotRecording" },
+        plannedExecutionFinalizer: validRecordingFinalizer,
+        didSendViaMessagingTool: true,
+        messagingToolSentMediaUrls: [validRecordingFinalizer.recordingPath],
+        payloadAlreadyHasMedia: false,
+        attempts: 0,
+        maxAttempts: 1,
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldEnterPlannedExecutionSendRecordingPhase({
+        plannedExecution: { packetId: "godotRecording" },
+        plannedExecutionFinalizer: validRecordingFinalizer,
+        didSendViaMessagingTool: false,
+        payloadAlreadyHasMedia: true,
+        payloadMediaUrls: [validRecordingFinalizer.recordingPath],
+        attempts: 0,
+        maxAttempts: 1,
+      }),
     ).toBe(false);
   });
 

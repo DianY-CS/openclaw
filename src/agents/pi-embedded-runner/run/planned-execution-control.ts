@@ -86,7 +86,9 @@ export function shouldEnterPlannedExecutionSendRecordingPhase(params: {
   plannedExecution?: { packetId?: string };
   plannedExecutionFinalizer?: PlannedExecutionFinalizerResult;
   didSendViaMessagingTool?: boolean;
+  messagingToolSentMediaUrls?: readonly string[];
   payloadAlreadyHasMedia: boolean;
+  payloadMediaUrls?: readonly string[];
   attempts: number;
   maxAttempts: number;
 }): boolean {
@@ -95,8 +97,13 @@ export function shouldEnterPlannedExecutionSendRecordingPhase(params: {
     shouldAttemptArtifactDelivery({
       artifactAccepted: params.plannedExecutionFinalizer?.ok === true,
       deliveryState: {
+        artifactPath: params.plannedExecutionFinalizer?.ok
+          ? params.plannedExecutionFinalizer.recordingPath
+          : undefined,
         didSendViaMessagingTool: params.didSendViaMessagingTool,
+        messagingToolSentMediaUrls: params.messagingToolSentMediaUrls,
         payloadAlreadyHasMedia: params.payloadAlreadyHasMedia,
+        payloadMediaUrls: params.payloadMediaUrls,
       },
       attempts: params.attempts,
       maxAttempts: params.maxAttempts,
@@ -108,7 +115,9 @@ export function shouldRetryPlannedExecutionSendRecording(params: {
   plannedExecution?: { packetId?: string };
   plannedExecutionFinalizer?: PlannedExecutionFinalizerResult;
   didSendViaMessagingTool?: boolean;
+  messagingToolSentMediaUrls?: readonly string[];
   payloadAlreadyHasMedia: boolean;
+  payloadMediaUrls?: readonly string[];
   attempts: number;
   maxAttempts: number;
 }): boolean {

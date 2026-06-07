@@ -31,10 +31,43 @@ describe("planned artifact delivery helpers", () => {
     ).toBe(true);
   });
 
-  it("treats existing media or message sends as delivery evidence", () => {
+  it("requires fallback media evidence to match the planned artifact path", () => {
     expect(hasPlannedArtifactDeliveryEvidence({})).toBe(false);
-    expect(hasPlannedArtifactDeliveryEvidence({ didSendViaMessagingTool: true })).toBe(true);
-    expect(hasPlannedArtifactDeliveryEvidence({ payloadAlreadyHasMedia: true })).toBe(true);
+    expect(
+      hasPlannedArtifactDeliveryEvidence({
+        artifactPath: recordingArtifact.path,
+        didSendViaMessagingTool: true,
+        messagingToolSentMediaUrls: [recordingArtifact.path],
+      }),
+    ).toBe(true);
+    expect(
+      hasPlannedArtifactDeliveryEvidence({
+        artifactPath: recordingArtifact.path,
+        payloadAlreadyHasMedia: true,
+        payloadMediaUrls: [`file://${recordingArtifact.path}`],
+      }),
+    ).toBe(true);
+    expect(
+      hasPlannedArtifactDeliveryEvidence({
+        artifactPath: recordingArtifact.path,
+        didSendViaMessagingTool: true,
+        messagingToolSentMediaUrls: ["/workspace/jobs/game/results/job/other.mp4"],
+      }),
+    ).toBe(false);
+    expect(
+      hasPlannedArtifactDeliveryEvidence({
+        artifactPath: "C:\\OpenClawWorkspace\\jobs\\game\\results\\job\\recording.mp4",
+        payloadAlreadyHasMedia: true,
+        payloadMediaUrls: ["file:///C:/OpenClawWorkspace/jobs/game/results/job/recording.mp4"],
+      }),
+    ).toBe(true);
+    expect(
+      hasPlannedArtifactDeliveryEvidence({
+        artifactPath: "C:\\OpenClawWorkspace\\jobs\\game\\results\\job\\recording.mp4",
+        payloadAlreadyHasMedia: true,
+        payloadMediaUrls: ["/C:/OpenClawWorkspace/jobs/game/results/job/recording.mp4"],
+      }),
+    ).toBe(true);
   });
 
   it("classifies delivery evidence from structured runtime state", () => {
@@ -51,13 +84,37 @@ describe("planned artifact delivery helpers", () => {
       source: "delivery_evidence",
       evidence,
     });
-    expect(classifyPlannedArtifactDeliveryEvidence({ didSendViaMessagingTool: true })).toEqual({
+    expect(
+      classifyPlannedArtifactDeliveryEvidence({
+        artifactPath: recordingArtifact.path,
+        didSendViaMessagingTool: true,
+        messagingToolSentMediaUrls: [recordingArtifact.path],
+      }),
+    ).toEqual({
       ok: true,
-      source: "messaging_tool_send",
+      source: "messaging_tool_media",
+      path: recordingArtifact.path,
     });
-    expect(classifyPlannedArtifactDeliveryEvidence({ payloadAlreadyHasMedia: true })).toEqual({
+    expect(
+      classifyPlannedArtifactDeliveryEvidence({
+        artifactPath: recordingArtifact.path,
+        payloadAlreadyHasMedia: true,
+        payloadMediaUrls: [recordingArtifact.path],
+      }),
+    ).toEqual({
       ok: true,
       source: "payload_media",
+      path: recordingArtifact.path,
+    });
+    expect(
+      classifyPlannedArtifactDeliveryEvidence({
+        artifactPath: recordingArtifact.path,
+        didSendViaMessagingTool: true,
+        messagingToolSentMediaUrls: [],
+      }),
+    ).toEqual({
+      ok: false,
+      reason: "missing_artifact_path_match",
     });
     expect(classifyPlannedArtifactDeliveryEvidence({})).toEqual({
       ok: false,
@@ -78,7 +135,11 @@ describe("planned artifact delivery helpers", () => {
     expect(
       shouldAttemptArtifactDelivery({
         artifactAccepted: true,
-        deliveryState: { payloadAlreadyHasMedia: true },
+        deliveryState: {
+          artifactPath: recordingArtifact.path,
+          payloadAlreadyHasMedia: true,
+          payloadMediaUrls: [recordingArtifact.path],
+        },
         attempts: 0,
         maxAttempts: 1,
       }),
