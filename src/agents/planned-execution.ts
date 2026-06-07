@@ -3,6 +3,22 @@ import path from "node:path";
 
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope.js";
+import {
+  type ArtifactAcceptanceCriteria,
+  validateArtifactAcceptanceCriteria,
+} from "./planned-execution/artifacts.js";
+import {
+  buildGodotRecordingArtifact,
+  buildGodotRecordingArtifactCriteria,
+  buildGodotRecordingRequestArtifact as buildGodotRecordingRequestArtifactDescriptor,
+  buildGodotRecordingRequestCriteria,
+  DEFAULT_GODOT_RECORDING_MIN_EFFECTIVE_FPS,
+  DEFAULT_GODOT_RECORDING_MIN_FPS,
+  DEFAULT_GODOT_RECORDING_MIN_SECONDS,
+  GODOT_RECORDING_ARTIFACT_ID,
+  GODOT_RECORDING_PROJECT_PATH,
+  type GodotRecordingRequestArtifact,
+} from "./planned-execution/godot-recording.js";
 
 export type PlannedExecutionPacketId = "godotRecording";
 
@@ -11,17 +27,6 @@ export type PlannedExecutionRewrite = {
   prompt: string;
   jobId?: string;
 };
-
-export type GodotRecordingRequestArtifact = {
-  jobId: string;
-  requestPath: string;
-  request: Record<string, unknown>;
-};
-
-const GODOT_RECORDING_PROJECT_PATH = "D:\\OpenClawWorkspace\\games\\roguelike_auto_chess_mvp";
-const GODOT_RECORDING_RECORD_SECONDS = 15;
-const GODOT_RECORDING_RECORD_FPS = 60;
-const GODOT_RECORDING_STARTUP_WAIT_SECONDS = 1;
 
 function wildcardPatternMatches(pattern: string, value: string): boolean {
   const escaped = pattern
@@ -129,32 +134,7 @@ export function buildGodotRecordingRequestArtifact(
   if (!safeJobId) {
     throw new Error("Unsafe Godot recording job id");
   }
-  const joinPath =
-    workspaceRoot.includes("\\") || /^[A-Za-z]:/u.test(workspaceRoot) ? path.join : path.posix.join;
-  return {
-    jobId: safeJobId,
-    requestPath: joinPath(workspaceRoot, "jobs", "game", "requests", `${safeJobId}.json`),
-    request: {
-      job_id: safeJobId,
-      action: "run_and_capture",
-      project_path: GODOT_RECORDING_PROJECT_PATH,
-      scene: "scenes/combat_sandbox.tscn",
-      wait_seconds: 6,
-      startup_wait_seconds: GODOT_RECORDING_STARTUP_WAIT_SECONDS,
-      record_seconds: GODOT_RECORDING_RECORD_SECONDS,
-      record_fps: GODOT_RECORDING_RECORD_FPS,
-      record_width: 1920,
-      record_height: 1080,
-      capture: {
-        video: true,
-        screenshot: false,
-        record_seconds: GODOT_RECORDING_RECORD_SECONDS,
-        fps: GODOT_RECORDING_RECORD_FPS,
-        width: 1920,
-        height: 1080,
-      },
-    },
-  };
+  return buildGodotRecordingRequestArtifactDescriptor({ jobId: safeJobId, workspaceRoot });
 }
 
 export async function ensureGodotRecordingRequest(params: {
@@ -277,7 +257,7 @@ Required order:
 2. CREATE_REQUEST. Tool-call only. Create request_path with the exact JSON above. Prefer one command that creates the parent directory and writes the file. A directory-only command is not enough; this step is complete only after the write/create tool result says request_path was written successfully. Stop this turn after the create/write tool call.
 3. VALIDATE_REQUEST. Tool-call only. Read request_path back and validate it is JSON with top-level job_id=current_job_id, project_path exactly "D:\\OpenClawWorkspace\\games\\roguelike_auto_chess_mvp", record_seconds=15, record_fps=60, and capture.fps=60. If any field differs, rewrite request_path with the exact JSON above and stop. Do not poll status_path after a failed validation in the same turn.
 4. POLL_STATUS. Tool-call only. First wait 20 seconds after successful VALIDATE_REQUEST, then read status_path. If status_path does not exist, wait 5 seconds and read the same status_path again. If status_path exists but status is not "done", wait 5 seconds and read the same status_path again. Repeat up to 14 polls. Stop polling immediately if status is "failed" or another clear failure appears. Do not use global file searches. Do not say "Now polling status"; read status_path with a tool call.
-5. VALIDATE_VIDEO. Tool-call only. Read probe_path. Success requires duration_seconds >= 14.5 and average_fps >= 55.
+5. VALIDATE_VIDEO. Tool-call only. Read probe_path. Success requires duration_seconds >= 14.5, average_fps >= 55, and effective_fps >= 10 when present.
 6. SEND_RECORDING. Tool-call only. Send recording_path with the message tool using exactly: action "send", message "Here is the 15-second Godot gameplay recording.", filePath recording_path.
 7. FINAL. Final answer only after send evidence exists. Delivery evidence means a tool result with ok=true, sendVideo, deliveryKind=video, or messageId.
 
@@ -424,9 +404,6 @@ export type PlannedExecutionFinalizerResult =
     };
 
 const DEFAULT_PLANNED_EXECUTION_WORKSPACE_ROOT = "/home/node/.openclaw/workspace";
-const DEFAULT_GODOT_RECORDING_MIN_SECONDS = 14.5;
-const DEFAULT_GODOT_RECORDING_MIN_FPS = 55;
-const DEFAULT_GODOT_RECORDING_MIN_EFFECTIVE_FPS = 10;
 const DEFAULT_GODOT_RECORDING_WAIT_MS = 60_000;
 const DEFAULT_GODOT_RECORDING_POLL_INTERVAL_MS = 5_000;
 
@@ -443,14 +420,29 @@ async function readJsonRecord(filePath: string): Promise<Record<string, unknown>
   }
 }
 
-async function readFirstJsonRecord(filePaths: string[]): Promise<Record<string, unknown> | undefined> {
+async function readFirstJsonRecordWithPath(filePaths: string[]): Promise<
+  | {
+      path: string;
+      record: Record<string, unknown>;
+    }
+  | undefined
+> {
   for (const filePath of filePaths) {
     const parsed = await readJsonRecord(filePath);
     if (parsed) {
-      return parsed;
+      return { path: filePath, record: parsed };
     }
   }
   return undefined;
+}
+
+async function isNonEmptyFile(filePath: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(filePath);
+    return stat.isFile() && stat.size > 0;
+  } catch {
+    return false;
+  }
 }
 
 function sleep(ms: number): Promise<void> {
@@ -472,37 +464,101 @@ function safeGodotRecordingJobId(jobId: unknown): string | undefined {
 function validateGodotRecordingRequestRecord(params: {
   request: Record<string, unknown> | undefined;
   jobId: string;
+  requestPath: string;
 }): string | undefined {
   const request = params.request;
   if (!request) {
     return "request_missing";
   }
-  if (request.job_id !== params.jobId) {
-    return "request_job_id_mismatch";
-  }
-  if (request.project_path !== GODOT_RECORDING_PROJECT_PATH) {
-    return "request_project_path_mismatch";
-  }
-  if (request.startup_wait_seconds !== GODOT_RECORDING_STARTUP_WAIT_SECONDS) {
-    return "request_startup_wait_mismatch";
-  }
-  if (request.record_seconds !== GODOT_RECORDING_RECORD_SECONDS) {
-    return "request_record_seconds_mismatch";
-  }
-  if (request.record_fps !== GODOT_RECORDING_RECORD_FPS) {
-    return "request_record_fps_mismatch";
-  }
   const capture = isRecord(request.capture) ? request.capture : undefined;
   if (!capture) {
     return "request_capture_missing";
   }
-  if (capture.record_seconds !== GODOT_RECORDING_RECORD_SECONDS) {
-    return "request_capture_record_seconds_mismatch";
+
+  const criteria = buildGodotRecordingRequestCriteria({
+    jobId: params.jobId,
+    requestPath: params.requestPath,
+  });
+  const validation = validateArtifactAcceptanceCriteria({
+    artifacts: [],
+    criteria,
+    facts: {
+      jsonByPath: {
+        [params.requestPath]: request,
+      },
+    },
+  });
+  if (validation.ok) {
+    return undefined;
   }
-  if (capture.fps !== GODOT_RECORDING_RECORD_FPS) {
-    return "request_capture_fps_mismatch";
+  return resolveGodotRecordingRequestFailureReason({
+    criteria,
+    checks: validation.checks,
+    requestPath: params.requestPath,
+  });
+}
+
+function resolveGodotRecordingRequestFailureReason(params: {
+  criteria: ArtifactAcceptanceCriteria[];
+  checks: Record<string, boolean>;
+  requestPath: string;
+}): string {
+  const reasonByField: Record<string, string> = {
+    job_id: "request_job_id_mismatch",
+    project_path: "request_project_path_mismatch",
+    startup_wait_seconds: "request_startup_wait_mismatch",
+    record_seconds: "request_record_seconds_mismatch",
+    record_fps: "request_record_fps_mismatch",
+    "capture.record_seconds": "request_capture_record_seconds_mismatch",
+    "capture.fps": "request_capture_fps_mismatch",
+  };
+
+  for (const criterion of params.criteria) {
+    if (criterion.kind !== "json_field_equals") {
+      continue;
+    }
+    const checkId = `json_field_equals:${params.requestPath}:${criterion.field}`;
+    if (params.checks[checkId] === false) {
+      return reasonByField[criterion.field] ?? "request_field_mismatch";
+    }
   }
-  return undefined;
+  return "request_field_mismatch";
+}
+
+function resolveGodotRecordingArtifactFailureReason(params: {
+  checks: Record<string, boolean>;
+  evidence: Record<string, unknown>;
+  minDurationSeconds: number;
+  minFps: number;
+  minEffectiveFps: number;
+}): string {
+  const fileCheckId = `file_exists:${GODOT_RECORDING_ARTIFACT_ID}`;
+  if (params.checks[fileCheckId] === false) {
+    return "recording_missing";
+  }
+
+  const durationCheckId = `video_duration_seconds:${GODOT_RECORDING_ARTIFACT_ID}:min=${params.minDurationSeconds}`;
+  if (params.checks[durationCheckId] === false) {
+    const actual = isRecord(params.evidence[durationCheckId])
+      ? params.evidence[durationCheckId].actual
+      : undefined;
+    return actual === undefined ? "missing_video_probe" : "recording_too_short";
+  }
+
+  const fpsCheckId = `video_average_fps:${GODOT_RECORDING_ARTIFACT_ID}:min=${params.minFps}`;
+  if (params.checks[fpsCheckId] === false) {
+    const actual = isRecord(params.evidence[fpsCheckId])
+      ? params.evidence[fpsCheckId].actual
+      : undefined;
+    return actual === undefined ? "missing_video_probe" : "fps_too_low";
+  }
+
+  const effectiveFpsCheckId = `video_effective_fps:${GODOT_RECORDING_ARTIFACT_ID}:min=${params.minEffectiveFps}`;
+  if (params.checks[effectiveFpsCheckId] === false) {
+    return "effective_fps_too_low";
+  }
+
+  return "artifact_validation_failed";
 }
 
 async function resolveGodotRecordingFinalizerOnce(params: {
@@ -526,9 +582,11 @@ async function resolveGodotRecordingFinalizerOnce(params: {
     };
   }
 
+  const requestArtifact = await readFirstJsonRecordWithPath(params.requestPaths);
   const requestValidationReason = validateGodotRecordingRequestRecord({
-    request: await readFirstJsonRecord(params.requestPaths),
+    request: requestArtifact?.record,
     jobId: params.jobId,
+    requestPath: requestArtifact?.path ?? params.requestPaths[0] ?? "request.json",
   });
   if (requestValidationReason) {
     return {
@@ -547,58 +605,47 @@ async function resolveGodotRecordingFinalizerOnce(params: {
   const frameCount = finiteNumber(probe?.frame_count);
   const effectiveFps = finiteNumber(probe?.effective_fps);
   const effectiveFrameCount = finiteNumber(probe?.effective_frame_count);
+  const recordingExists = await isNonEmptyFile(params.recordingPath);
+  const recordingArtifact = buildGodotRecordingArtifact({
+    recordingPath: params.recordingPath,
+    probePath: params.probePath,
+  });
+  const artifactCriteria = buildGodotRecordingArtifactCriteria({
+    minDurationSeconds: params.minDurationSeconds,
+    minFps: params.minFps,
+    minEffectiveFps: params.minEffectiveFps,
+  });
+  const artifactValidation = validateArtifactAcceptanceCriteria({
+    artifacts: [recordingArtifact],
+    criteria: artifactCriteria,
+    facts: {
+      existingPaths: recordingExists ? [params.recordingPath] : [],
+      jsonByPath: {
+        ...(probe ? { [params.probePath]: probe } : {}),
+      },
+    },
+  });
+  if (!artifactValidation.ok) {
+    return {
+      ok: false,
+      packetId: "godotRecording",
+      jobId: params.jobId,
+      reason: resolveGodotRecordingArtifactFailureReason({
+        checks: artifactValidation.checks,
+        evidence: artifactValidation.evidence,
+        minDurationSeconds: params.minDurationSeconds,
+        minFps: params.minFps,
+        minEffectiveFps: params.minEffectiveFps,
+      }),
+    };
+  }
+
   if (durationSeconds === undefined || averageFps === undefined) {
     return {
       ok: false,
       packetId: "godotRecording",
       jobId: params.jobId,
       reason: "missing_video_probe",
-    };
-  }
-
-  if (durationSeconds < params.minDurationSeconds) {
-    return {
-      ok: false,
-      packetId: "godotRecording",
-      jobId: params.jobId,
-      reason: "recording_too_short",
-    };
-  }
-
-  if (averageFps < params.minFps) {
-    return {
-      ok: false,
-      packetId: "godotRecording",
-      jobId: params.jobId,
-      reason: "fps_too_low",
-    };
-  }
-
-  if (effectiveFps !== undefined && effectiveFps < params.minEffectiveFps) {
-    return {
-      ok: false,
-      packetId: "godotRecording",
-      jobId: params.jobId,
-      reason: "effective_fps_too_low",
-    };
-  }
-
-  try {
-    const recordingStat = await fs.stat(params.recordingPath);
-    if (!recordingStat.isFile() || recordingStat.size <= 0) {
-      return {
-        ok: false,
-        packetId: "godotRecording",
-        jobId: params.jobId,
-        reason: "recording_missing",
-      };
-    }
-  } catch {
-    return {
-      ok: false,
-      packetId: "godotRecording",
-      jobId: params.jobId,
-      reason: "recording_missing",
     };
   }
 
@@ -740,4 +787,3 @@ export function resolvePlannedExecutionRewrite(params: {
     messageChannel: params.messageChannel,
   });
 }
-
