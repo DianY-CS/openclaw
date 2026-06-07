@@ -219,6 +219,104 @@ Recommended modules:
 Existing `src/agents/planned-execution.ts` can be split gradually instead of in
 one large move.
 
+## Reuse Discovery
+
+Future planned-execution work should start from the existing component map
+before adding new workflow logic. A change that creates a job, validates an
+artifact, delivers an artifact, finalizes evidence, or classifies harness
+success should identify which existing component it reuses.
+
+Use this lookup order:
+
+1. `src/agents/planned-execution/artifacts.ts` for jobs, artifacts, criteria,
+   validation results, and pure validation helpers.
+2. `src/agents/planned-execution/delivery.ts` for delivery requests, delivery
+   evidence, and pure delivery evidence classification.
+3. `src/agents/planned-execution/phases.ts` for generic phase names, aliases,
+   and phase mapping helpers.
+4. `src/agents/planned-execution/godot-recording.ts` for Godot-specific request
+   builders, criteria builders, and packet construction.
+5. `src/agents/pi-embedded-runner/run/planned-execution-control.ts` for
+   runner-facing retry, continuation, and phase policy.
+
+If no existing component fits, the change should state why the behavior is new,
+which layer owns it, and whether it is a generic component, a domain-specific
+component, a runtime adapter, or a harness/evidence classifier.
+
+## Component Layer Standard
+
+Every reusable planned-execution component should belong to one layer.
+
+- Generic components own framework-agnostic types, criteria, validation
+  results, phase aliases, and pure decision helpers.
+- Domain-specific components own workflow request shapes, thresholds, packet
+  builders, and domain criteria builders.
+- Runtime adapters own filesystem writes, process starts, polling, channel API
+  calls, delivery attempts, and session mutation.
+- Harness/evidence classifiers own pass/fail classification from structured
+  evidence and false-positive prevention.
+
+Domain-specific constants must not move into generic types unless they are
+genuinely cross-domain. Runtime side effects must not move into generic helper
+modules.
+
+## New Component Acceptance
+
+Add a new generic component only when at least one condition is true:
+
+- A proven workflow already uses the behavior and extraction preserves current
+  behavior.
+- A second real workflow needs the same behavior.
+- The behavior is part of the public planned-execution contract and cannot stay
+  in a domain-specific builder.
+
+When adding a new component, include:
+
+- the owning layer
+- the public functions or types callers should use
+- cases where the component should not be used
+- structured criteria or evidence shapes when the component validates or
+  finalizes behavior
+- focused tests for the component boundary
+
+Do not add a generic component only to shorten one workflow. Prefer a
+domain-specific builder when the behavior is mostly packet text, thresholds,
+request fields, or channel-specific payload details.
+
+## Review Checklist
+
+Before approving planned-execution changes, check:
+
+- The change looked for an existing component before adding new logic.
+- New validation is expressed as `ArtifactAcceptanceCriteria` when it can be
+  deterministic.
+- Completion, delivery, and finalization use structured evidence instead of
+  text-only claims.
+- `run.ts` changes are limited to orchestration, live counters, logging context,
+  and continuation wiring.
+- Godot-specific behavior stays in Godot-specific builders or planned-execution
+  helpers.
+- Telegram or other channel-specific behavior stays behind a delivery adapter
+  and returns delivery evidence.
+- Harness success classification rejects obvious false positives such as prose
+  claims without artifact or delivery evidence.
+
+## Component Maturity
+
+Document reusable components with a maturity label when the distinction affects
+future reuse:
+
+- `proven`: protected by focused tests and at least one real workflow or harness
+  path.
+- `candidate`: extracted from one workflow and reusable, but still allowed to
+  change while adoption grows.
+- `compat`: kept for older labels or callers, with a stated removal condition.
+- `deprecated`: retained only for old behavior and should not be used by new
+  code.
+
+Aliases such as `SEND_RECORDING` should remain `compat` until generic
+`DELIVER_ARTIFACT` behavior has E2E proof with no delivery regression.
+
 ## Side-Effect Boundary
 
 Pure modules may inspect and classify data but should not directly:
@@ -300,19 +398,29 @@ browser capture, image generation artifact delivery, or document export.
 
 ## Testing Requirements
 
+Verification should scale with the changed layer while keeping E2E proof as the
+default acceptance gate for workflow-facing behavior.
+
 For each migration step:
 
 - run `node --check` on changed TypeScript and harness files
-- run targeted Vitest tests for pure modules
-- run the Godot planned-executor harness
-- run Telegram E2E smoke when the Telegram test environment is available
+- run targeted Vitest tests for changed pure modules
+- run the smallest relevant Godot planned-executor harness or E2E smoke that
+  exercises the touched workflow path
+- run Telegram E2E smoke when real Telegram delivery behavior changes and the
+  Telegram test environment is available
 
 Suggested acceptance gates:
 
 - unit tests: all pass
-- local harness: no behavior regression
-- Telegram smoke: at least one successful run
+- E2E or harness proof: no behavior regression on the touched workflow path
+- Telegram smoke: at least one successful run when delivery behavior changed
 - before removing aliases: 5-run E2E with no delivery regression
+
+Pure type-only, docs-only, or helper-only changes may use focused unit/static
+proof plus an explicit note that no runtime workflow behavior changed. Runtime,
+delivery, external job, finalizer, or harness classifier changes should keep E2E
+or harness proof as the default.
 
 ## Open Questions
 

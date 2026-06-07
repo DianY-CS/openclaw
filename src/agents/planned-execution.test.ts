@@ -275,6 +275,7 @@ describe("planned execution packet routing", () => {
     averageFps?: number;
     effectiveFps?: number;
     jobId?: string;
+    omitProbeFile?: boolean;
     requestPatch?: Record<string, unknown>;
   }) {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-planned-exec-"));
@@ -316,7 +317,9 @@ describe("planned execution packet routing", () => {
       path.join(resultDir, "status.json"),
       JSON.stringify({ status: "done", job_id: jobId, video_probe: probe }),
     );
-    await writeFile(path.join(resultDir, "video_probe.json"), JSON.stringify(probe));
+    if (!params?.omitProbeFile) {
+      await writeFile(path.join(resultDir, "video_probe.json"), JSON.stringify(probe));
+    }
     await writeFile(path.join(resultDir, "recording.mp4"), Buffer.from("fake mp4"));
     await writeFile(path.join(requestDoneDir, `${jobId}.json`), JSON.stringify(request));
     return { workspaceRoot, jobId, resultDir };
@@ -358,6 +361,48 @@ describe("planned execution packet routing", () => {
       packetId: "godotRecording",
       jobId: fixture.jobId,
       reason: "recording_too_short",
+    });
+  });
+
+  it("does not finalize recordings with low average fps", async () => {
+    const fixture = await writeGodotRecordingFixture({ averageFps: 12 });
+
+    const result = await resolvePlannedExecutionFinalizer({
+      plannedExecution: {
+        packetId: "godotRecording",
+        jobId: fixture.jobId,
+      },
+      workspaceRoot: fixture.workspaceRoot,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      packetId: "godotRecording",
+      jobId: fixture.jobId,
+      reason: "fps_too_low",
+    });
+  });
+
+  it("does not finalize recordings without video probe facts", async () => {
+    const fixture = await writeGodotRecordingFixture({
+      omitProbeFile: true,
+    });
+    const statusPath = path.join(fixture.resultDir, "status.json");
+    await writeFile(statusPath, JSON.stringify({ status: "done", job_id: fixture.jobId }));
+
+    const result = await resolvePlannedExecutionFinalizer({
+      plannedExecution: {
+        packetId: "godotRecording",
+        jobId: fixture.jobId,
+      },
+      workspaceRoot: fixture.workspaceRoot,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      packetId: "godotRecording",
+      jobId: fixture.jobId,
+      reason: "missing_video_probe",
     });
   });
 

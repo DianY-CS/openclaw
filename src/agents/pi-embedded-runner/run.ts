@@ -50,6 +50,7 @@ import {
   ensureGodotRecordingRequest,
   resolvePlannedExecutionFinalizer,
 } from "../planned-execution.js";
+import { hasPlannedArtifactDeliveryEvidence } from "../planned-execution/delivery.js";
 import {
   coerceToFailoverError,
   describeFailoverError,
@@ -3604,10 +3605,12 @@ export async function runEmbeddedPiAgent(
           );
           const plannedExecutionFinalizerAllowed =
             params.trigger !== "heartbeat" && params.messageChannel !== "heartbeat";
+          const plannedExecutionDeliveryEvidencePresent = hasPlannedArtifactDeliveryEvidence({
+            didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+            payloadAlreadyHasMedia,
+          });
           let plannedExecutionFinalizer =
-            !plannedExecutionFinalizerAllowed ||
-            attempt.didSendViaMessagingTool ||
-            payloadAlreadyHasMedia
+            !plannedExecutionFinalizerAllowed || plannedExecutionDeliveryEvidencePresent
               ? undefined
               : await resolvePlannedExecutionFinalizer({
                   plannedExecution: attempt.plannedExecution,

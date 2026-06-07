@@ -10,20 +10,59 @@ export type PlannedArtifactDeliveryState = {
   deliveryEvidence?: ArtifactDeliveryEvidence;
 };
 
+export type PlannedArtifactDeliveryEvidenceClassification =
+  | {
+      ok: true;
+      source: "delivery_evidence";
+      evidence: ArtifactDeliveryEvidence;
+    }
+  | {
+      ok: true;
+      source: "messaging_tool_send" | "payload_media";
+    }
+  | {
+      ok: false;
+      reason: "missing_structured_delivery_evidence";
+    };
+
 export function isArtifactDeliveryEvidenceOk(
   evidence: ArtifactDeliveryEvidence | undefined,
 ): boolean {
   return evidence?.ok === true;
 }
 
+export function classifyPlannedArtifactDeliveryEvidence(
+  state: PlannedArtifactDeliveryState,
+): PlannedArtifactDeliveryEvidenceClassification {
+  if (isArtifactDeliveryEvidenceOk(state.deliveryEvidence)) {
+    return {
+      ok: true,
+      source: "delivery_evidence",
+      evidence: state.deliveryEvidence,
+    };
+  }
+  if (state.didSendViaMessagingTool) {
+    return {
+      ok: true,
+      source: "messaging_tool_send",
+    };
+  }
+  if (state.payloadAlreadyHasMedia) {
+    return {
+      ok: true,
+      source: "payload_media",
+    };
+  }
+  return {
+    ok: false,
+    reason: "missing_structured_delivery_evidence",
+  };
+}
+
 export function hasPlannedArtifactDeliveryEvidence(
   state: PlannedArtifactDeliveryState,
 ): boolean {
-  return Boolean(
-    state.didSendViaMessagingTool ||
-      state.payloadAlreadyHasMedia ||
-      isArtifactDeliveryEvidenceOk(state.deliveryEvidence),
-  );
+  return classifyPlannedArtifactDeliveryEvidence(state).ok;
 }
 
 export function shouldAttemptArtifactDelivery(params: {

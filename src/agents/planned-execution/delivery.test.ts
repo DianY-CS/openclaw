@@ -4,6 +4,7 @@ import type { PlannedArtifact } from "./artifacts.js";
 import {
   buildArtifactDeliveryEvidence,
   buildArtifactDeliveryRequest,
+  classifyPlannedArtifactDeliveryEvidence,
   hasPlannedArtifactDeliveryEvidence,
   isArtifactDeliveryEvidenceOk,
   shouldAttemptArtifactDelivery,
@@ -34,6 +35,34 @@ describe("planned artifact delivery helpers", () => {
     expect(hasPlannedArtifactDeliveryEvidence({})).toBe(false);
     expect(hasPlannedArtifactDeliveryEvidence({ didSendViaMessagingTool: true })).toBe(true);
     expect(hasPlannedArtifactDeliveryEvidence({ payloadAlreadyHasMedia: true })).toBe(true);
+  });
+
+  it("classifies delivery evidence from structured runtime state", () => {
+    const evidence = buildArtifactDeliveryEvidence({
+      ok: true,
+      artifactId: "recording",
+      channel: "telegram",
+      mode: "real",
+      messageId: "42",
+    });
+
+    expect(classifyPlannedArtifactDeliveryEvidence({ deliveryEvidence: evidence })).toEqual({
+      ok: true,
+      source: "delivery_evidence",
+      evidence,
+    });
+    expect(classifyPlannedArtifactDeliveryEvidence({ didSendViaMessagingTool: true })).toEqual({
+      ok: true,
+      source: "messaging_tool_send",
+    });
+    expect(classifyPlannedArtifactDeliveryEvidence({ payloadAlreadyHasMedia: true })).toEqual({
+      ok: true,
+      source: "payload_media",
+    });
+    expect(classifyPlannedArtifactDeliveryEvidence({})).toEqual({
+      ok: false,
+      reason: "missing_structured_delivery_evidence",
+    });
   });
 
   it("gates delivery attempts on accepted artifacts, missing evidence, and attempt budget", () => {
