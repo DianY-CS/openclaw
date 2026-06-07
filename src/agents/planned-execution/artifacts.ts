@@ -197,7 +197,7 @@ export function validateArtifactAcceptanceCriteria(params: {
         const artifact = lookupArtifact(artifactsById, criterion.artifactId);
         const probe = artifact ? lookupProbe({ artifact, facts }) : undefined;
         const actual = finiteNumber(probe?.effective_fps);
-        ok = actual === undefined || actual >= criterion.min;
+        ok = Boolean(artifact) && (actual === undefined || actual >= criterion.min);
         evidence[checkId] = {
           artifactId: criterion.artifactId,
           actual,

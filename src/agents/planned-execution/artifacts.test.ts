@@ -144,4 +144,32 @@ describe("planned execution artifacts", () => {
       terminal: true,
     });
   });
+
+  it("fails effective fps validation for unknown artifact ids", () => {
+    const result = validateArtifactAcceptanceCriteria({
+      artifacts: [recordingArtifact],
+      criteria: [{ kind: "video_effective_fps", artifactId: "misspelled-recording", min: 10 }],
+      facts: {
+        jsonByPath: {
+          [recordingArtifact.probePath]: {
+            duration_seconds: 15.1,
+            average_fps: 60,
+          },
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      artifactId: "misspelled-recording",
+      checks: {
+        "video_effective_fps:misspelled-recording:min=10": false,
+      },
+      failure: {
+        reason: "artifact_missing",
+        retryable: false,
+        terminal: true,
+      },
+    });
+  });
 });
