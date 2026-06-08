@@ -50,6 +50,7 @@ import {
   ensureGodotRecordingRequest,
   resolvePlannedExecutionFinalizer,
 } from "../planned-execution.js";
+import { hasPlannedArtifactDeliveryEvidence } from "../planned-execution/delivery.js";
 import {
   coerceToFailoverError,
   describeFailoverError,
@@ -3602,16 +3603,29 @@ export async function runEmbeddedPiAgent(
           const payloadAlreadyHasMedia = (payloadsWithToolMedia ?? []).some((payload) =>
             Boolean(payload.mediaUrl?.trim() || payload.mediaUrls?.some((url) => url.trim())),
           );
+          const payloadMediaUrls = (payloadsWithToolMedia ?? []).flatMap((payload) => [
+            ...(payload.mediaUrl ? [payload.mediaUrl] : []),
+            ...(payload.mediaUrls ?? []),
+          ]);
           const plannedExecutionFinalizerAllowed =
             params.trigger !== "heartbeat" && params.messageChannel !== "heartbeat";
-          let plannedExecutionFinalizer =
-            !plannedExecutionFinalizerAllowed ||
-            attempt.didSendViaMessagingTool ||
-            payloadAlreadyHasMedia
-              ? undefined
-              : await resolvePlannedExecutionFinalizer({
-                  plannedExecution: attempt.plannedExecution,
-                });
+          let plannedExecutionFinalizer = plannedExecutionFinalizerAllowed
+            ? await resolvePlannedExecutionFinalizer({
+                plannedExecution: attempt.plannedExecution,
+              })
+            : undefined;
+          const plannedExecutionDeliveryEvidencePresent = hasPlannedArtifactDeliveryEvidence({
+            artifactPath: plannedExecutionFinalizer?.ok
+              ? plannedExecutionFinalizer.recordingPath
+              : undefined,
+            didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+            messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+            payloadAlreadyHasMedia,
+            payloadMediaUrls,
+          });
+          if (!plannedExecutionFinalizerAllowed || plannedExecutionDeliveryEvidencePresent) {
+            plannedExecutionFinalizer = undefined;
+          }
           let plannedExecutionFinalizerApplied = false;
           let plannedExecutionTerminalFailure = false;
           const plannedExecutionNeedsSendRecordingPhase =
@@ -3619,7 +3633,9 @@ export async function runEmbeddedPiAgent(
               plannedExecution: attempt.plannedExecution,
               plannedExecutionFinalizer,
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
               payloadAlreadyHasMedia,
+              payloadMediaUrls,
               attempts: plannedExecutionSendPhaseAttempts,
               maxAttempts: MAX_PLANNED_EXECUTION_SEND_PHASE_ATTEMPTS,
             });
@@ -3639,7 +3655,9 @@ export async function runEmbeddedPiAgent(
               plannedExecution: attempt.plannedExecution,
               plannedExecutionFinalizer,
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
               payloadAlreadyHasMedia,
+              payloadMediaUrls,
               attempts: plannedExecutionSendRecoveryAttempts,
               maxAttempts: MAX_PLANNED_EXECUTION_SEND_RECOVERY_RETRIES,
             });

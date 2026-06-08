@@ -1,0 +1,3 @@
+display_name: Componentized Workflow Design
+short_description: Reuse planned-execution workflow components.
+default_prompt: Use this when designing, extracting, or reusing OpenClaw workflow components.

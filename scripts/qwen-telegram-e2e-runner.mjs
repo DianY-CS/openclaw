@@ -299,19 +299,46 @@ function parseDriverJson(result) {
   }
 }
 
-function inferEvidence(text, parsed = null) {
+function parseJsonObject(text) {
+  if (!text || typeof text !== "string") {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function hasTelegramDeliveryEvidence(parsed) {
+  const message = parsed?.message || parsed?.reply || null;
+  const payload = parseJsonObject(message?.text);
+  const delivery = payload?.telegram_delivery;
+  return Boolean(
+    delivery &&
+      typeof delivery === "object" &&
+      delivery.ok === true &&
+      (delivery.messageId || delivery.message_id),
+  );
+}
+
+export function isTelegramVideoContentType(contentType) {
+  const normalized = String(contentType || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/gu, "");
+  return normalized === "video" || normalized === "messagevideo";
+}
+
+export function inferEvidence(text, parsed = null) {
   const lower = text.toLowerCase();
   const message = parsed?.message || parsed?.reply || null;
-  const contentType = String(message?.contentType || "").toLowerCase();
-  const hasMedia = Boolean(message?.hasMedia);
+  const hasVideoContentType = isTelegramVideoContentType(message?.contentType);
+  const hasDeliveryEvidence = hasTelegramDeliveryEvidence(parsed);
   return {
-    hasVideoSignal:
-      contentType === "video" ||
-      (hasMedia && lower.includes("video")) ||
-      lower.includes("recording.mp4") ||
-      lower.includes("video") ||
-      lower.includes("sent") ||
-      lower.includes("发送"),
+    hasVideoSignal: hasVideoContentType,
+    hasDeliveryEvidence,
     hasGuardrailSignal: lower.includes("guardrail") || lower.includes("tool-intent"),
     hasBlockedSignal:
       lower.includes("blocked") ||
@@ -358,9 +385,6 @@ async function waitForTaskProgress(options, runId, taskMessageId) {
       });
       lastActivityAt = Date.now();
       if (evidence.hasVideoSignal && !evidence.hasBlockedSignal) {
-        break;
-      }
-      if (text.includes("RESPONSE_MODE") || text.includes('"status"')) {
         break;
       }
     } else {
@@ -451,17 +475,21 @@ async function runOne(options, index) {
   const observationEvidence = run.task.observations.reduce(
     (accumulator, item) => ({
       hasVideoSignal: accumulator.hasVideoSignal || Boolean(item.evidence?.hasVideoSignal),
+      hasDeliveryEvidence:
+        accumulator.hasDeliveryEvidence || Boolean(item.evidence?.hasDeliveryEvidence),
       hasGuardrailSignal:
         accumulator.hasGuardrailSignal || Boolean(item.evidence?.hasGuardrailSignal),
       hasBlockedSignal: accumulator.hasBlockedSignal || Boolean(item.evidence?.hasBlockedSignal),
     }),
     {
       hasVideoSignal: false,
+      hasDeliveryEvidence: false,
       hasGuardrailSignal: false,
       hasBlockedSignal: false,
     },
   );
   evidence.hasVideoSignal ||= observationEvidence.hasVideoSignal;
+  evidence.hasDeliveryEvidence ||= observationEvidence.hasDeliveryEvidence;
   evidence.hasGuardrailSignal ||= observationEvidence.hasGuardrailSignal;
   evidence.hasBlockedSignal ||= observationEvidence.hasBlockedSignal;
   if (options.dryRun) {
@@ -537,7 +565,9 @@ async function main() {
   process.stdout.write(`${JSON.stringify(report.summary, null, 2)}\n`);
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.stack || error.message : String(error)}\n`);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.stack || error.message : String(error)}\n`);
+    process.exit(1);
+  });
+}

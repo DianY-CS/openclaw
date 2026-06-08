@@ -1,17 +1,9 @@
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { PlannedExecutionFinalizerResult } from "../../planned-execution.js";
-
-export const PLANNED_EXECUTION_PHASES = [
-  "PROJECT_EXISTS",
-  "CREATE_REQUEST",
-  "VALIDATE_REQUEST",
-  "POLL_STATUS",
-  "VALIDATE_VIDEO",
-  "SEND_RECORDING",
-  "FINAL",
-] as const;
-
-export type PlannedExecutionPhase = (typeof PLANNED_EXECUTION_PHASES)[number];
+import { shouldAttemptArtifactDelivery } from "../../planned-execution/delivery.js";
+import type { PlannedExecutionPhase } from "../../planned-execution/phases.js";
+export { PLANNED_EXECUTION_PHASES } from "../../planned-execution/phases.js";
+export type { PlannedExecutionPhase } from "../../planned-execution/phases.js";
 
 export const EXECUTION_PHASE_RETRY_INSTRUCTION =
   "Execution-phase correction: your previous assistant turn declared an execution phase but did not emit the required tool call. The phase label is useful state, but it is not a user-visible reply. Resume exactly at the declared phase and emit the required structured tool call now with no prose before or after. Do not restart earlier phases, do not infer a new job id from directory listings, and do not describe what you will do.";
@@ -94,16 +86,28 @@ export function shouldEnterPlannedExecutionSendRecordingPhase(params: {
   plannedExecution?: { packetId?: string };
   plannedExecutionFinalizer?: PlannedExecutionFinalizerResult;
   didSendViaMessagingTool?: boolean;
+  messagingToolSentMediaUrls?: readonly string[];
   payloadAlreadyHasMedia: boolean;
+  payloadMediaUrls?: readonly string[];
   attempts: number;
   maxAttempts: number;
 }): boolean {
-  return Boolean(
-    params.plannedExecutionFinalizer?.ok === true &&
-      params.plannedExecution?.packetId === "godotRecording" &&
-      !params.didSendViaMessagingTool &&
-      !params.payloadAlreadyHasMedia &&
-      params.attempts < params.maxAttempts,
+  return (
+    params.plannedExecution?.packetId === "godotRecording" &&
+    shouldAttemptArtifactDelivery({
+      artifactAccepted: params.plannedExecutionFinalizer?.ok === true,
+      deliveryState: {
+        artifactPath: params.plannedExecutionFinalizer?.ok
+          ? params.plannedExecutionFinalizer.recordingPath
+          : undefined,
+        didSendViaMessagingTool: params.didSendViaMessagingTool,
+        messagingToolSentMediaUrls: params.messagingToolSentMediaUrls,
+        payloadAlreadyHasMedia: params.payloadAlreadyHasMedia,
+        payloadMediaUrls: params.payloadMediaUrls,
+      },
+      attempts: params.attempts,
+      maxAttempts: params.maxAttempts,
+    })
   );
 }
 
@@ -111,7 +115,9 @@ export function shouldRetryPlannedExecutionSendRecording(params: {
   plannedExecution?: { packetId?: string };
   plannedExecutionFinalizer?: PlannedExecutionFinalizerResult;
   didSendViaMessagingTool?: boolean;
+  messagingToolSentMediaUrls?: readonly string[];
   payloadAlreadyHasMedia: boolean;
+  payloadMediaUrls?: readonly string[];
   attempts: number;
   maxAttempts: number;
 }): boolean {
