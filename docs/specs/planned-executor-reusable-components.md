@@ -239,6 +239,14 @@ Recommended modules:
   - planned job, artifact, criteria, validation, and delivery evidence types
   - pure validation helpers
 
+- `src/agents/planned-execution/jobs.ts`
+  - pure planned job lifecycle path descriptors
+  - default workspace/lane path conventions for request, result, status, and
+    artifact paths
+  - pure request lifecycle classification from runtime-collected request facts
+  - generic planned job descriptor construction from already-known workflow
+    facts
+
 - `src/agents/planned-execution/delivery.ts`
   - artifact delivery request/evidence helpers
   - pure delivery attempt and evidence classification

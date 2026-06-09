@@ -10,6 +10,7 @@ import {
 import {
   buildGodotRecordingArtifact,
   buildGodotRecordingArtifactCriteria,
+  buildGodotRecordingJobPaths,
   buildGodotRecordingRequestArtifact as buildGodotRecordingRequestArtifactDescriptor,
   buildGodotRecordingRequestCriteria,
   DEFAULT_GODOT_RECORDING_MIN_EFFECTIVE_FPS,
@@ -19,6 +20,11 @@ import {
   GODOT_RECORDING_PROJECT_PATH,
   type GodotRecordingRequestArtifact,
 } from "./planned-execution/godot-recording.js";
+import {
+  DEFAULT_PLANNED_EXECUTION_WORKSPACE_ROOT,
+  resolvePlannedJobRequestLifecycle,
+  type PlannedJobPaths,
+} from "./planned-execution/jobs.js";
 
 export type PlannedExecutionPacketId = "godotRecording";
 
@@ -156,9 +162,10 @@ export async function canonicalizeExistingGodotRecordingRequestArtifacts(params:
 }> {
   const workspaceRoot = params.workspaceRoot?.trim() || DEFAULT_PLANNED_EXECUTION_WORKSPACE_ROOT;
   const artifact = buildGodotRecordingRequestArtifact(params.jobId, workspaceRoot);
+  const paths = buildGodotRecordingJobPaths({ jobId: artifact.jobId, workspaceRoot });
   const candidatePaths = [
-    path.join(workspaceRoot, "jobs", "game", "requests_done", `${artifact.jobId}.json`),
-    path.join(workspaceRoot, "jobs", "game", "requests", `${artifact.jobId}.json`),
+    paths.requestDonePath,
+    paths.requestPath,
   ];
   const rewrittenPaths: string[] = [];
 
@@ -186,11 +193,12 @@ function buildGodotRecordingPacket(params: {
 }): PlannedExecutionRewrite {
   const jobId = `qwen_planned_godot_recording_${sanitizeJobIdPart(params.runId) || "run"}`;
   const requestArtifact = buildGodotRecordingRequestArtifact(jobId);
+  const paths = buildGodotRecordingJobPaths({ jobId });
   const requestPath = requestArtifact.requestPath;
-  const resultDir = `/home/node/.openclaw/workspace/jobs/game/results/${jobId}`;
-  const statusPath = `${resultDir}/status.json`;
-  const recordingPath = `${resultDir}/recording.mp4`;
-  const probePath = `${resultDir}/video_probe.json`;
+  const resultDir = paths.resultDir;
+  const statusPath = paths.statusPath;
+  const recordingPath = paths.recordingPath;
+  const probePath = paths.probePath;
   const requestJson = JSON.stringify(requestArtifact.request, null, 2);
   const prompt = `PLANNED_EXECUTION_PACKET
 packet_id: godotRecording
@@ -311,8 +319,8 @@ function buildGodotRecordingSendOnlyPacket(params: {
   if (!jobId) {
     return undefined;
   }
-  const resultDir = `/home/node/.openclaw/workspace/jobs/game/results/${jobId}`;
-  const recordingPath = `${resultDir}/recording.mp4`;
+  const paths = buildGodotRecordingJobPaths({ jobId });
+  const recordingPath = paths.recordingPath;
   const prompt = `PLANNED_EXECUTION_PACKET
 packet_id: godotRecording
 role: executor
@@ -403,7 +411,6 @@ export type PlannedExecutionFinalizerResult =
       reason: string;
     };
 
-const DEFAULT_PLANNED_EXECUTION_WORKSPACE_ROOT = "/home/node/.openclaw/workspace";
 const DEFAULT_GODOT_RECORDING_WAIT_MS = 60_000;
 const DEFAULT_GODOT_RECORDING_POLL_INTERVAL_MS = 5_000;
 
@@ -418,22 +425,6 @@ async function readJsonRecord(filePath: string): Promise<Record<string, unknown>
   } catch {
     return undefined;
   }
-}
-
-async function readFirstJsonRecordWithPath(filePaths: string[]): Promise<
-  | {
-      path: string;
-      record: Record<string, unknown>;
-    }
-  | undefined
-> {
-  for (const filePath of filePaths) {
-    const parsed = await readJsonRecord(filePath);
-    if (parsed) {
-      return { path: filePath, record: parsed };
-    }
-  }
-  return undefined;
 }
 
 async function isNonEmptyFile(filePath: string): Promise<boolean> {
@@ -571,7 +562,7 @@ async function resolveGodotRecordingFinalizerOnce(params: {
   jobId: string;
   resultDir: string;
   statusPath: string;
-  requestPaths: string[];
+  paths: PlannedJobPaths;
   probePath: string;
   recordingPath: string;
   minDurationSeconds: number;
@@ -588,11 +579,26 @@ async function resolveGodotRecordingFinalizerOnce(params: {
     };
   }
 
-  const requestArtifact = await readFirstJsonRecordWithPath(params.requestPaths);
+  const requestLifecycle = resolvePlannedJobRequestLifecycle({
+    paths: params.paths,
+    facts: {
+      doneRecord: await readJsonRecord(params.paths.requestDonePath),
+      activeRecord: await readJsonRecord(params.paths.requestPath),
+      failedRecord: await readJsonRecord(params.paths.requestFailedPath),
+    },
+  });
+  if (requestLifecycle.status === "failed") {
+    return {
+      ok: false,
+      packetId: "godotRecording",
+      jobId: params.jobId,
+      reason: requestLifecycle.failureReason ?? "request_failed",
+    };
+  }
   const requestValidationReason = validateGodotRecordingRequestRecord({
-    request: requestArtifact?.record,
+    request: requestLifecycle.record,
     jobId: params.jobId,
-    requestPath: requestArtifact?.path ?? params.requestPaths[0] ?? "request.json",
+    requestPath: requestLifecycle.path ?? params.paths.requestPath,
   });
   if (requestValidationReason) {
     return {
@@ -697,14 +703,7 @@ export async function resolvePlannedExecutionFinalizer(params: {
   }
 
   const workspaceRoot = params.workspaceRoot?.trim() || DEFAULT_PLANNED_EXECUTION_WORKSPACE_ROOT;
-  const resultDir = path.join(workspaceRoot, "jobs", "game", "results", jobId);
-  const statusPath = path.join(resultDir, "status.json");
-  const requestPaths = [
-    path.join(workspaceRoot, "jobs", "game", "requests_done", `${jobId}.json`),
-    path.join(workspaceRoot, "jobs", "game", "requests", `${jobId}.json`),
-  ];
-  const probePath = path.join(resultDir, "video_probe.json");
-  const recordingPath = path.join(resultDir, "recording.mp4");
+  const paths = buildGodotRecordingJobPaths({ jobId, workspaceRoot });
   const minDurationSeconds = params.minDurationSeconds ?? DEFAULT_GODOT_RECORDING_MIN_SECONDS;
   const minFps = params.minFps ?? DEFAULT_GODOT_RECORDING_MIN_FPS;
   const minEffectiveFps =
@@ -720,11 +719,11 @@ export async function resolvePlannedExecutionFinalizer(params: {
   while (true) {
     lastResult = await resolveGodotRecordingFinalizerOnce({
       jobId,
-      resultDir,
-      statusPath,
-      requestPaths,
-      probePath,
-      recordingPath,
+      resultDir: paths.resultDir,
+      statusPath: paths.statusPath,
+      paths,
+      probePath: paths.probePath,
+      recordingPath: paths.recordingPath,
       minDurationSeconds,
       minFps,
       minEffectiveFps,

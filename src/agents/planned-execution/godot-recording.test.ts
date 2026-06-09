@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildGodotRecordingArtifact,
   buildGodotRecordingArtifactCriteria,
+  buildGodotRecordingJobPaths,
+  buildGodotRecordingPlannedJob,
   buildGodotRecordingRequestArtifact,
   buildGodotRecordingRequestCriteria,
   DEFAULT_GODOT_RECORDING_MIN_EFFECTIVE_FPS,
@@ -107,5 +109,57 @@ describe("Godot planned recording helpers", () => {
       probePath: "/workspace/jobs/game/results/job/video_probe.json",
       required: true,
     });
+  });
+
+  it("builds Godot recording job paths and a planned job descriptor", () => {
+    const paths = buildGodotRecordingJobPaths({
+      jobId: "qwen_planned_godot_recording_test-run",
+      workspaceRoot: "/workspace",
+    });
+
+    expect(paths).toMatchObject({
+      requestPath: "/workspace/jobs/game/requests/qwen_planned_godot_recording_test-run.json",
+      requestDonePath:
+        "/workspace/jobs/game/requests_done/qwen_planned_godot_recording_test-run.json",
+      requestFailedPath:
+        "/workspace/jobs/game/requests_failed/qwen_planned_godot_recording_test-run.json",
+      resultDir: "/workspace/jobs/game/results/qwen_planned_godot_recording_test-run",
+      statusPath: "/workspace/jobs/game/results/qwen_planned_godot_recording_test-run/status.json",
+      recordingPath:
+        "/workspace/jobs/game/results/qwen_planned_godot_recording_test-run/recording.mp4",
+      probePath:
+        "/workspace/jobs/game/results/qwen_planned_godot_recording_test-run/video_probe.json",
+    });
+
+    const job = buildGodotRecordingPlannedJob({
+      jobId: "qwen_planned_godot_recording_test-run",
+      workspaceRoot: "/workspace",
+    });
+
+    expect(job).toMatchObject({
+      jobId: "qwen_planned_godot_recording_test-run",
+      kind: "godotRecording",
+      requestPath: paths.requestPath,
+      resultDir: paths.resultDir,
+      statusPath: paths.statusPath,
+      timeoutSeconds: 240,
+      expectedArtifacts: [
+        {
+          id: "recording",
+          kind: "video",
+          path: paths.recordingPath,
+          probePath: paths.probePath,
+          required: true,
+        },
+      ],
+    });
+    expect(job.acceptanceCriteria).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          field: "job_id",
+          path: paths.requestPath,
+        }),
+      ]),
+    );
   });
 });

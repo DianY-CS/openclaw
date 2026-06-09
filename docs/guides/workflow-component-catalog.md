@@ -95,6 +95,69 @@ Before adding workflow logic, identify:
 
 - `src/agents/planned-execution/artifacts.test.ts`
 
+## Planned job lifecycle paths
+
+**File**
+
+- `src/agents/planned-execution/jobs.ts`
+
+**Layer**
+
+- Generic component.
+
+**Maturity**
+
+- `candidate`.
+
+**Purpose**
+
+- Builds framework-agnostic planned job lifecycle path descriptors and generic
+  planned job descriptors from already-known workflow facts.
+
+**Owns**
+
+- `DEFAULT_PLANNED_EXECUTION_WORKSPACE_ROOT`
+- `PlannedJobPaths`
+- `joinPlannedExecutionPath`
+- `buildPlannedJobPaths`
+- `buildPlannedResultPath`
+- `buildPlannedJob`
+- `resolvePlannedJobRequestLifecycle`
+
+**Does not own**
+
+- Filesystem polling or reads.
+- Request-file writes.
+- Process execution.
+- Artifact validation.
+- Workflow-specific request validation.
+- Godot-specific request fields or thresholds.
+
+**Use when**
+
+- Runtime, finalizers, or harnesses need canonical request/result/status paths
+  for a known planned job id.
+- A domain component needs to build artifact paths under a planned job result
+  directory.
+- A runtime adapter has already collected request lifecycle facts and needs a
+  pure `done` / `active` / `failed` / `missing` classification.
+
+**Do not use when**
+
+- The job id is not known or has not been validated by the owning workflow.
+- A workflow needs live filesystem facts; use a runtime adapter for that.
+
+**Reference usage**
+
+- Godot recording path construction in
+  `src/agents/planned-execution/godot-recording.ts`.
+- Planned-execution finalizer path construction in
+  `src/agents/planned-execution.ts`.
+
+**Testing**
+
+- `src/agents/planned-execution/jobs.test.ts`
+
 ## Artifact delivery evidence
 
 **File**

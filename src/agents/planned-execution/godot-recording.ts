@@ -1,9 +1,14 @@
-import path from "node:path";
-
 import type {
   ArtifactAcceptanceCriteria,
+  PlannedJob,
   PlannedArtifact,
 } from "./artifacts.js";
+import {
+  buildPlannedJob,
+  buildPlannedJobPaths,
+  buildPlannedResultPath,
+  type PlannedJobPaths,
+} from "./jobs.js";
 
 export const GODOT_RECORDING_PROJECT_PATH = "D:\\OpenClawWorkspace\\games\\roguelike_auto_chess_mvp";
 export const GODOT_RECORDING_RECORD_SECONDS = 15;
@@ -23,16 +28,34 @@ export type GodotRecordingRequestArtifact = {
   request: Record<string, unknown>;
 };
 
+export type GodotRecordingJobPaths = PlannedJobPaths & {
+  recordingPath: string;
+  probePath: string;
+};
+
+export function buildGodotRecordingJobPaths(params: {
+  jobId: string;
+  workspaceRoot?: string;
+}): GodotRecordingJobPaths {
+  const paths = buildPlannedJobPaths({
+    jobId: params.jobId,
+    workspaceRoot: params.workspaceRoot,
+  });
+  return {
+    ...paths,
+    recordingPath: buildPlannedResultPath(paths, "recording.mp4"),
+    probePath: buildPlannedResultPath(paths, "video_probe.json"),
+  };
+}
+
 export function buildGodotRecordingRequestArtifact(params: {
   jobId: string;
   workspaceRoot?: string;
 }): GodotRecordingRequestArtifact {
-  const workspaceRoot = params.workspaceRoot ?? "/home/node/.openclaw/workspace";
-  const joinPath =
-    workspaceRoot.includes("\\") || /^[A-Za-z]:/u.test(workspaceRoot) ? path.join : path.posix.join;
+  const paths = buildGodotRecordingJobPaths(params);
   return {
     jobId: params.jobId,
-    requestPath: joinPath(workspaceRoot, "jobs", "game", "requests", `${params.jobId}.json`),
+    requestPath: paths.requestPath,
     request: {
       job_id: params.jobId,
       action: "run_and_capture",
@@ -175,4 +198,30 @@ export function buildGodotRecordingArtifactCriteria(params?: {
       min: params?.minEffectiveFps ?? DEFAULT_GODOT_RECORDING_MIN_EFFECTIVE_FPS,
     },
   ];
+}
+
+export function buildGodotRecordingPlannedJob(params: {
+  jobId: string;
+  workspaceRoot?: string;
+  timeoutSeconds?: number;
+}): PlannedJob {
+  const paths = buildGodotRecordingJobPaths(params);
+  const artifact = buildGodotRecordingArtifact({
+    recordingPath: paths.recordingPath,
+    probePath: paths.probePath,
+  });
+  return buildPlannedJob({
+    jobId: params.jobId,
+    kind: "godotRecording",
+    paths,
+    timeoutSeconds: params.timeoutSeconds ?? 240,
+    expectedArtifacts: [artifact],
+    acceptanceCriteria: [
+      ...buildGodotRecordingRequestCriteria({
+        jobId: params.jobId,
+        requestPath: paths.requestPath,
+      }),
+      ...buildGodotRecordingArtifactCriteria(),
+    ],
+  });
 }
