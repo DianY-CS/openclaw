@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { classifyMockMediaDeliveryEvidence as classifyMockMediaDeliveryEvidenceFromLifecycle } from "./lib/planned-execution-lifecycle-evidence.mjs";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 const DEFAULT_MODEL = "llamacpp/Qwen3.6-35B-A3B-APEX-I-Balanced.gguf";
@@ -78,19 +80,21 @@ Allowed work:
   "action": "run_and_capture",
   "project_path": "D:\\\\OpenClawWorkspace\\\\games\\\\roguelike_auto_chess_mvp",
   "scene": "scenes/combat_sandbox.tscn",
-  "wait_seconds": 6,
-  "startup_wait_seconds": 6,
+  "wait_seconds": 16,
+  "startup_wait_seconds": 1,
+  "planning_stage_seconds": 3,
   "record_seconds": 15,
   "record_fps": 60,
-  "record_width": 1920,
-  "record_height": 1080,
+  "record_width": 1280,
+  "record_height": 720,
+  "godot_movie": true,
   "capture": {
     "video": true,
     "screenshot": false,
     "record_seconds": 15,
     "fps": 60,
-    "width": 1920,
-    "height": 1080
+    "width": 1280,
+    "height": 720
   }
 }
 \`\`\`
@@ -1127,32 +1131,13 @@ export function classifyMockMediaDeliveryEvidence({
   receipt,
   validation,
 }) {
-  const receiptPath = `/home/node/.openclaw/workspace/jobs/mock_media_deliveries/${expectedJobId}.json`;
-  const checks = {
-    expectedJobId: finalJson?.job_id === expectedJobId,
-    mockReceiptPathOk: finalJson?.mock_delivery_receipt === receiptPath,
-    receiptExists: receipt?.exists === true,
-    receiptJsonValid: receipt?.jsonValid === true,
-    contractOk: validation?.ok === true,
-    actionOk: validation?.checks?.actionOk === true,
-    mediaPathOk: validation?.checks?.mediaPathOk === true,
-    mimeTypeOk: validation?.checks?.mimeTypeOk === true,
-    captionOk: validation?.checks?.captionOk === true,
-    validationOk: validation?.checks?.validationOk === true,
-    actualVideoValid: recordingResult?.video_valid === true,
-  };
-  return {
-    ok:
-      checks.expectedJobId &&
-      checks.mockReceiptPathOk &&
-      checks.receiptExists &&
-      checks.receiptJsonValid &&
-      checks.contractOk &&
-      checks.actualVideoValid,
-    artifactOk: checks.receiptExists && checks.receiptJsonValid && checks.contractOk,
-    receiptPath,
-    checks,
-  };
+  return classifyMockMediaDeliveryEvidenceFromLifecycle({
+    expectedJobId,
+    finalJson,
+    recordingResult,
+    receipt,
+    validation,
+  });
 }
 
 export function classifyMockMediaDelivery(
@@ -1351,19 +1336,21 @@ async function createDeterministicRecordingRequest(options, expectedJobId) {
     action: "run_and_capture",
     project_path: "D:\\OpenClawWorkspace\\games\\roguelike_auto_chess_mvp",
     scene: "scenes/combat_sandbox.tscn",
-    wait_seconds: 6,
-    startup_wait_seconds: 6,
+    wait_seconds: 16,
+    startup_wait_seconds: 1,
+    planning_stage_seconds: 3,
     record_seconds: 15,
     record_fps: 60,
-    record_width: 1920,
-    record_height: 1080,
+    record_width: 1280,
+    record_height: 720,
+    godot_movie: true,
     capture: {
       video: true,
       screenshot: false,
       record_seconds: 15,
       fps: 60,
-      width: 1920,
-      height: 1080,
+      width: 1280,
+      height: 720,
     },
   };
   const writeResult = await applyPrintedFileAction(options, {
@@ -1561,19 +1548,19 @@ async function verifyRequestArtifactCandidates(options, expectedJobIds) {
     action: parsed?.action === "run_and_capture",
     projectPath: parsed?.project_path === "D:\\OpenClawWorkspace\\games\\roguelike_auto_chess_mvp",
     scene: parsed?.scene === "scenes/combat_sandbox.tscn",
-    startupWait:
-      Number.isFinite(Number(parsed?.startup_wait_seconds)) &&
-      Number(parsed?.startup_wait_seconds) > 0,
+    startupWait: parsed?.startup_wait_seconds === 1,
+    planningStageSeconds: parsed?.planning_stage_seconds === 3,
     recordSeconds: parsed?.record_seconds === 15,
     recordFps: parsed?.record_fps === 60,
-    recordWidth: parsed?.record_width === 1920,
-    recordHeight: parsed?.record_height === 1080,
+    recordWidth: parsed?.record_width === 1280,
+    recordHeight: parsed?.record_height === 720,
+    godotMovie: parsed?.godot_movie === true,
     captureVideo: capture.video === true,
     captureScreenshot: capture.screenshot === false,
     captureRecordSeconds: capture.record_seconds === 15,
     captureFps: capture.fps === 60,
-    captureWidth: capture.width === 1920,
-    captureHeight: capture.height === 1080,
+    captureWidth: capture.width === 1280,
+    captureHeight: capture.height === 720,
   };
   const captureValid = Object.values(captureChecks).every(Boolean);
   return {

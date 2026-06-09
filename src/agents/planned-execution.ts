@@ -204,7 +204,7 @@ ${params.originalPrompt.trim()}
 Goal:
 - Find the Godot auto chess MVP project.
 - Run gameplay through the Windows host runner.
-- Record a 15-second 60fps video.
+- Record a 15-second 60fps video that starts with a 3-second planning stage, then combat for the remaining duration.
 - Validate the recording.
 - Send the recording to the current ${params.messageChannel ?? "message"} conversation.
 
@@ -229,7 +229,7 @@ Exact JSON rules:
 - The request JSON above is authoritative. Do not retype path separators from memory.
 - The only valid project_path is exactly "D:\\OpenClawWorkspace\\games\\roguelike_auto_chess_mvp".
 - A mixed path such as "D:\\OpenClawWorkspace\\games/roguelike_auto_chess_mvp" is invalid even if the host runner later accepts it.
-- If VALIDATE_REQUEST finds any mismatch in job_id, project_path, record_seconds, record_fps, or capture.fps, rewrite request_path with the exact JSON above and stop that turn after the write tool result.
+- If VALIDATE_REQUEST finds any mismatch in job_id, project_path, planning_stage_seconds, godot_movie, record_seconds, record_fps, record_width, record_height, or capture.fps, rewrite request_path with the exact JSON above and stop that turn after the write tool result.
 
 Sequential tool protocol:
 - This workflow has strict dependencies. Do not parallelize dependent steps.
@@ -255,7 +255,7 @@ Sequential tool protocol:
 Required order:
 1. PROJECT_EXISTS. Tool-call only. Verify project_godot exists.
 2. CREATE_REQUEST. Tool-call only. Create request_path with the exact JSON above. Prefer one command that creates the parent directory and writes the file. A directory-only command is not enough; this step is complete only after the write/create tool result says request_path was written successfully. Stop this turn after the create/write tool call.
-3. VALIDATE_REQUEST. Tool-call only. Read request_path back and validate it is JSON with top-level job_id=current_job_id, project_path exactly "D:\\OpenClawWorkspace\\games\\roguelike_auto_chess_mvp", record_seconds=15, record_fps=60, and capture.fps=60. If any field differs, rewrite request_path with the exact JSON above and stop. Do not poll status_path after a failed validation in the same turn.
+3. VALIDATE_REQUEST. Tool-call only. Read request_path back and validate it is JSON with top-level job_id=current_job_id, project_path exactly "D:\\OpenClawWorkspace\\games\\roguelike_auto_chess_mvp", planning_stage_seconds=3, godot_movie=true, record_seconds=15, record_fps=60, record_width=1280, record_height=720, and capture.fps=60. If any field differs, rewrite request_path with the exact JSON above and stop. Do not poll status_path after a failed validation in the same turn.
 4. POLL_STATUS. Tool-call only. First wait 20 seconds after successful VALIDATE_REQUEST, then read status_path. If status_path does not exist, wait 5 seconds and read the same status_path again. If status_path exists but status is not "done", wait 5 seconds and read the same status_path again. Repeat up to 14 polls. Stop polling immediately if status is "failed" or another clear failure appears. Do not use global file searches. Do not say "Now polling status"; read status_path with a tool call.
 5. VALIDATE_VIDEO. Tool-call only. Read probe_path. Success requires duration_seconds >= 14.5, average_fps >= 55, and effective_fps >= 10 when present.
 6. SEND_RECORDING. Tool-call only. Send recording_path with the message tool using exactly: action "send", message "Here is the 15-second Godot gameplay recording.", filePath recording_path.
@@ -507,10 +507,16 @@ function resolveGodotRecordingRequestFailureReason(params: {
     job_id: "request_job_id_mismatch",
     project_path: "request_project_path_mismatch",
     startup_wait_seconds: "request_startup_wait_mismatch",
+    planning_stage_seconds: "request_planning_stage_seconds_mismatch",
     record_seconds: "request_record_seconds_mismatch",
     record_fps: "request_record_fps_mismatch",
+    record_width: "request_record_width_mismatch",
+    record_height: "request_record_height_mismatch",
+    godot_movie: "request_godot_movie_mismatch",
     "capture.record_seconds": "request_capture_record_seconds_mismatch",
     "capture.fps": "request_capture_fps_mismatch",
+    "capture.width": "request_capture_width_mismatch",
+    "capture.height": "request_capture_height_mismatch",
   };
 
   for (const criterion of params.criteria) {

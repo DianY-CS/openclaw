@@ -1,6 +1,12 @@
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { PlannedExecutionFinalizerResult } from "../../planned-execution.js";
-import { shouldAttemptArtifactDelivery } from "../../planned-execution/delivery.js";
+import {
+  buildPlannedArtifactDeliveryFinalEvidence,
+  buildPlannedArtifactDeliveryFinalText,
+  classifyPlannedArtifactDeliveryEvidence,
+  shouldAttemptArtifactDelivery,
+  type PlannedArtifactDeliveryState,
+} from "../../planned-execution/delivery.js";
 import type { PlannedExecutionPhase } from "../../planned-execution/phases.js";
 export { PLANNED_EXECUTION_PHASES } from "../../planned-execution/phases.js";
 export type { PlannedExecutionPhase } from "../../planned-execution/phases.js";
@@ -14,7 +20,7 @@ const PLANNED_EXECUTION_PHASE_RETRY_INSTRUCTIONS: Record<PlannedExecutionPhase, 
   CREATE_REQUEST:
     "FAILED_PHASE=CREATE_REQUEST. Emit only the write/create-file tool call that writes the fixed request_path with the exact request JSON from the planned execution packet. Do not read, validate, poll, send, exec, process, start Godot, restart PROJECT_EXISTS, or output CREATE_REQUEST/EXEC_PHASE text.",
   VALIDATE_REQUEST:
-    "FAILED_PHASE=VALIDATE_REQUEST. Emit the tool call that reads the fixed request_path back and validates job_id, project_path, record_seconds, record_fps, and capture.fps. If a rewrite is needed, emit only the rewrite tool call. Do not poll status in this same turn and do not output VALIDATE_REQUEST/EXEC_PHASE text.",
+    "FAILED_PHASE=VALIDATE_REQUEST. Emit the tool call that reads the fixed request_path back and validates job_id, project_path, planning_stage_seconds, godot_movie, record_seconds, record_fps, record_width, record_height, and capture.fps. If a rewrite is needed, emit only the rewrite tool call. Do not poll status in this same turn and do not output VALIDATE_REQUEST/EXEC_PHASE text.",
   POLL_STATUS:
     "FAILED_PHASE=POLL_STATUS. Emit the tool call that reads the fixed status_path, or waits briefly then reads that same status_path. Do not list result directories, infer job ids, read probe_path, send video, or output POLL_STATUS/EXEC_PHASE text.",
   VALIDATE_VIDEO:
@@ -42,11 +48,17 @@ const TERMINAL_PLANNED_EXECUTION_FAILURE_REASONS = new Set([
   "request_job_id_mismatch",
   "request_project_path_mismatch",
   "request_startup_wait_mismatch",
+  "request_planning_stage_seconds_mismatch",
   "request_record_seconds_mismatch",
   "request_record_fps_mismatch",
+  "request_record_width_mismatch",
+  "request_record_height_mismatch",
+  "request_godot_movie_mismatch",
   "request_capture_missing",
   "request_capture_record_seconds_mismatch",
   "request_capture_fps_mismatch",
+  "request_capture_width_mismatch",
+  "request_capture_height_mismatch",
   "recording_too_short",
   "fps_too_low",
   "effective_fps_too_low",
@@ -65,6 +77,47 @@ export function buildTerminalPlannedExecutionFailurePayload(
   return {
     text: `Godot recording validation failed${jobIdText}: ${result.reason}. I did not send the recording because it did not meet the planned execution acceptance criteria.`,
     isError: true,
+  };
+}
+
+export function buildPlannedExecutionDeliveryFinalPayload(params: {
+  plannedExecutionFinalizer: Extract<PlannedExecutionFinalizerResult, { ok: true }>;
+  deliveryState: PlannedArtifactDeliveryState;
+}): ReplyPayload | undefined {
+  const delivery = classifyPlannedArtifactDeliveryEvidence({
+    ...params.deliveryState,
+    artifactPath: params.plannedExecutionFinalizer.recordingPath,
+  });
+  if (!delivery.ok) {
+    return undefined;
+  }
+
+  return {
+    text: buildPlannedArtifactDeliveryFinalText(
+      buildPlannedArtifactDeliveryFinalEvidence({
+        packetId: params.plannedExecutionFinalizer.packetId,
+        jobId: params.plannedExecutionFinalizer.jobId,
+        artifactPath: params.plannedExecutionFinalizer.recordingPath,
+        recordingValidated: true,
+        videoProbe: {
+          duration_seconds: params.plannedExecutionFinalizer.probe.durationSeconds,
+          average_fps: params.plannedExecutionFinalizer.probe.averageFps,
+          ...(params.plannedExecutionFinalizer.probe.frameCount !== undefined
+            ? { frame_count: params.plannedExecutionFinalizer.probe.frameCount }
+            : {}),
+          ...(params.plannedExecutionFinalizer.probe.effectiveFps !== undefined
+            ? { effective_fps: params.plannedExecutionFinalizer.probe.effectiveFps }
+            : {}),
+          ...(params.plannedExecutionFinalizer.probe.effectiveFrameCount !== undefined
+            ? {
+                effective_frame_count:
+                  params.plannedExecutionFinalizer.probe.effectiveFrameCount,
+              }
+            : {}),
+        },
+        delivery,
+      }),
+    ),
   };
 }
 

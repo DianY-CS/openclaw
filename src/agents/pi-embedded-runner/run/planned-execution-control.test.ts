@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildExecutionPhaseRetryInstruction,
+  buildPlannedExecutionDeliveryFinalPayload,
   buildTerminalPlannedExecutionFailurePayload,
   isTerminalPlannedExecutionFailure,
   shouldEnterPlannedExecutionSendRecordingPhase,
@@ -94,6 +95,24 @@ describe("planned execution control", () => {
         maxAttempts: 1,
       }),
     ).toBe(true);
+  });
+
+  it("builds structured final payload after artifact-bound media delivery", () => {
+    const payload = buildPlannedExecutionDeliveryFinalPayload({
+      plannedExecutionFinalizer: validRecordingFinalizer,
+      deliveryState: {
+        didSendViaMessagingTool: true,
+        messagingToolSentMediaUrls: [validRecordingFinalizer.recordingPath],
+      },
+    });
+
+    expect(payload?.text).toContain('"status":"done"');
+    expect(payload?.text).toContain(`"job_id":"${validRecordingFinalizer.jobId}"`);
+    expect(payload?.text).toContain(
+      `"recording_path":"${validRecordingFinalizer.recordingPath}"`,
+    );
+    expect(payload?.text).toContain('"telegram_delivery"');
+    expect(payload?.text).toContain('"ok":true');
   });
 
   it("retries create request only when no write tool ran", () => {

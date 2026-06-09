@@ -4,6 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  classifyTelegramPlannedExecutionEvidence,
+  isTelegramVideoContentType as classifyTelegramVideoContentType,
+} from "./lib/planned-execution-lifecycle-evidence.mjs";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 
@@ -273,6 +278,17 @@ async function driverWait(options, extraArgs = []) {
   return runCommand(invocation.command, invocation.args);
 }
 
+async function driverTranscript(options, extraArgs = []) {
+  const invocation = buildDriverInvocation(options, "transcript", extraArgs);
+  if (options.dryRun) {
+    return {
+      dryRun: true,
+      command: commandForDisplay(invocation.command, invocation.args),
+    };
+  }
+  return runCommand(invocation.command, invocation.args);
+}
+
 function appendFromBot(options, args) {
   if (options.fromBot) {
     args.push("--from-bot", options.fromBot);
@@ -299,55 +315,37 @@ function parseDriverJson(result) {
   }
 }
 
-function parseJsonObject(text) {
-  if (!text || typeof text !== "string") {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(text);
-    return parsed && typeof parsed === "object" ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function hasTelegramDeliveryEvidence(parsed) {
-  const message = parsed?.message || parsed?.reply || null;
-  const payload = parseJsonObject(message?.text);
-  const delivery = payload?.telegram_delivery;
-  return Boolean(
-    delivery &&
-      typeof delivery === "object" &&
-      delivery.ok === true &&
-      (delivery.messageId || delivery.message_id),
-  );
-}
-
 export function isTelegramVideoContentType(contentType) {
-  const normalized = String(contentType || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]/gu, "");
-  return normalized === "video" || normalized === "messagevideo";
+  return classifyTelegramVideoContentType(contentType);
 }
 
 export function inferEvidence(text, parsed = null) {
-  const lower = text.toLowerCase();
-  const message = parsed?.message || parsed?.reply || null;
-  const hasVideoContentType = isTelegramVideoContentType(message?.contentType);
-  const hasDeliveryEvidence = hasTelegramDeliveryEvidence(parsed);
-  return {
-    hasVideoSignal: hasVideoContentType,
-    hasDeliveryEvidence,
-    hasGuardrailSignal: lower.includes("guardrail") || lower.includes("tool-intent"),
-    hasBlockedSignal:
-      lower.includes("blocked") ||
-      lower.includes("permission denied") ||
-      lower.includes("can't") ||
-      lower.includes("cannot") ||
-      lower.includes("failed") ||
-      lower.includes("卡住"),
-  };
+  if (Array.isArray(parsed?.messages)) {
+    return parsed.messages.reduce(
+      (accumulator, message) => {
+        const evidence = classifyTelegramPlannedExecutionEvidence(message?.text || "", {
+          message,
+        });
+        return {
+          hasVideoSignal: accumulator.hasVideoSignal || evidence.hasVideoSignal,
+          hasDeliveryEvidence: accumulator.hasDeliveryEvidence || evidence.hasDeliveryEvidence,
+          deliveryEvidence: evidence.hasDeliveryEvidence
+            ? evidence.deliveryEvidence
+            : accumulator.deliveryEvidence,
+          hasGuardrailSignal: accumulator.hasGuardrailSignal || evidence.hasGuardrailSignal,
+          hasBlockedSignal: accumulator.hasBlockedSignal || evidence.hasBlockedSignal,
+        };
+      },
+      {
+        hasVideoSignal: false,
+        hasDeliveryEvidence: false,
+        deliveryEvidence: null,
+        hasGuardrailSignal: false,
+        hasBlockedSignal: false,
+      },
+    );
+  }
+  return classifyTelegramPlannedExecutionEvidence(text, parsed);
 }
 
 async function waitForTaskProgress(options, runId, taskMessageId) {
@@ -384,7 +382,7 @@ async function waitForTaskProgress(options, runId, taskMessageId) {
         evidence,
       });
       lastActivityAt = Date.now();
-      if (evidence.hasVideoSignal && !evidence.hasBlockedSignal) {
+      if (evidence.hasDeliveryEvidence && !evidence.hasBlockedSignal) {
         break;
       }
     } else {
@@ -465,6 +463,18 @@ async function runOne(options, index) {
 
   if (!options.dryRun) {
     run.task = await waitForTaskProgress(options, runId, taskMessageId);
+    await sleep(options.settleSeconds * 1000);
+    const transcriptArgs = ["--since", String(taskMessageId), "--limit", "80"];
+    const transcriptResult = await driverTranscript(options, transcriptArgs);
+    const transcriptText = collectText(transcriptResult);
+    const transcriptParsed = parseDriverJson(transcriptResult);
+    run.task.observations.push({
+      type: "transcript",
+      at: new Date().toISOString(),
+      result: transcriptResult,
+      parsed: transcriptParsed,
+      evidence: inferEvidence(transcriptText, transcriptParsed),
+    });
   }
 
   const combinedText = [
@@ -494,7 +504,7 @@ async function runOne(options, index) {
   evidence.hasBlockedSignal ||= observationEvidence.hasBlockedSignal;
   if (options.dryRun) {
     run.status = "dry-run";
-  } else if (evidence.hasVideoSignal && !evidence.hasBlockedSignal) {
+  } else if (evidence.hasDeliveryEvidence && !evidence.hasBlockedSignal) {
     run.status = "pass";
   } else if (evidence.hasBlockedSignal || evidence.hasGuardrailSignal) {
     run.status = "needs-review";

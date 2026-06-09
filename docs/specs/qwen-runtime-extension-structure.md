@@ -23,6 +23,15 @@ builder.
   - Owns Godot recording packet text, send-only and create-request-only rewrites,
     finalizer file/probe validation, and deterministic Godot request helpers.
 
+- `src/agents/planned-execution/godot-recording.ts`
+  - Owns the current Godot recording domain contract.
+  - For `roguelike_auto_chess_mvp`, the stable recording shape is
+    `godot_movie: true`, `record_width: 1280`, `record_height: 720`,
+    `startup_wait_seconds: 1`, `planning_stage_seconds: 3`, `record_seconds:
+    15`, and `record_fps: 60`.
+  - Runtime should consume this contract through request builders and artifact
+    criteria instead of duplicating those Godot-specific values in `run.ts`.
+
 - `src/agents/pi-embedded-runner/run/planned-execution-control.ts`
   - Owns planned execution control policy used by the runner loop.
   - Builds phase retry instructions.

@@ -123,6 +123,8 @@ Before adding workflow logic, identify:
 - `shouldAttemptArtifactDelivery`
 - `buildArtifactDeliveryRequest`
 - `buildArtifactDeliveryEvidence`
+- `buildPlannedArtifactDeliveryFinalEvidence`
+- `buildPlannedArtifactDeliveryFinalText`
 
 **Does not own**
 
@@ -137,6 +139,8 @@ Before adding workflow logic, identify:
 - A workflow must deliver an accepted artifact.
 - A finalizer or runner needs to know whether delivery should be attempted or
   retried.
+- Runtime needs a final structured delivery statement that binds a completed
+  job to a concrete artifact path and delivery evidence.
 
 **Do not use when**
 
@@ -146,6 +150,8 @@ Before adding workflow logic, identify:
 **Reference usage**
 
 - Send phase gates in
+  `src/agents/pi-embedded-runner/run/planned-execution-control.ts`.
+- Post-delivery final evidence payload construction in
   `src/agents/pi-embedded-runner/run/planned-execution-control.ts`.
 
 **Testing**
@@ -226,6 +232,9 @@ Before adding workflow logic, identify:
 
 - Godot project path and scene.
 - Current recording duration and fps targets.
+- Current 3-second planning-stage expectation before combat.
+- Current Godot movie capture preference, 1280x720 output target, and
+  desktop-capture diagnostics expectation.
 - Host-runner request JSON shape.
 - Godot request criteria.
 - Godot artifact criteria.
@@ -309,3 +318,63 @@ Before adding workflow logic, identify:
 **Testing**
 
 - `src/agents/pi-embedded-runner/run/planned-execution-control.test.ts`
+
+## Planned-execution lifecycle evidence classifiers
+
+**File**
+
+- `scripts/lib/planned-execution-lifecycle-evidence.mjs`
+
+**Layer**
+
+- Harness/evidence classifier.
+
+**Maturity**
+
+- `candidate`.
+
+**Purpose**
+
+- Classifies workflow-facing planned-execution proof from structured evidence
+  gathered by harnesses and E2E runners.
+
+**Owns**
+
+- Telegram planned-execution delivery finalization evidence classification.
+- Telegram video content-type signal classification.
+- Mock media delivery receipt evidence classification.
+- Path-bound finalization evidence where `telegram_delivery.path` matches the
+  planned artifact path, without requiring runtime to invent a channel message
+  id.
+- Compact runtime finalization evidence where delivery state has already been
+  matched to `recording_path` before emitting `telegram_delivery.ok`.
+
+**Does not own**
+
+- Telegram API calls.
+- Filesystem reads or receipt writes.
+- Model prompts.
+- Runtime session mutation.
+- Text-only delivery success claims.
+
+**Use when**
+
+- A harness or E2E runner needs to decide whether a planned-execution workflow
+  reached delivery/finalization.
+- Success must be bound to a concrete job id, artifact path, or receipt path.
+
+**Do not use when**
+
+- Runtime code needs to perform delivery.
+- The only available evidence is prose such as "sent" or "video probe shows".
+
+**Reference usage**
+
+- `scripts/qwen-telegram-e2e-runner.mjs`
+- `scripts/qwen-planned-executor-harness.mjs`
+
+**Testing**
+
+- `test/scripts/planned-execution-lifecycle-evidence.test.ts`
+- `test/scripts/qwen-telegram-e2e-runner.test.ts`
+- `test/scripts/qwen-planned-executor-harness.test.ts`

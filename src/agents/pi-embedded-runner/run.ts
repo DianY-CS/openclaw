@@ -186,6 +186,7 @@ import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
   buildExecutionPhaseRetryInstruction,
+  buildPlannedExecutionDeliveryFinalPayload,
   buildTerminalPlannedExecutionFailurePayload,
   isTerminalPlannedExecutionFailure,
   PLANNED_EXECUTION_PHASES,
@@ -3614,7 +3615,7 @@ export async function runEmbeddedPiAgent(
                 plannedExecution: attempt.plannedExecution,
               })
             : undefined;
-          const plannedExecutionDeliveryEvidencePresent = hasPlannedArtifactDeliveryEvidence({
+          const plannedExecutionDeliveryState = {
             artifactPath: plannedExecutionFinalizer?.ok
               ? plannedExecutionFinalizer.recordingPath
               : undefined,
@@ -3622,8 +3623,10 @@ export async function runEmbeddedPiAgent(
             messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
             payloadAlreadyHasMedia,
             payloadMediaUrls,
-          });
-          if (!plannedExecutionFinalizerAllowed || plannedExecutionDeliveryEvidencePresent) {
+          };
+          const plannedExecutionDeliveryEvidencePresent =
+            hasPlannedArtifactDeliveryEvidence(plannedExecutionDeliveryState);
+          if (!plannedExecutionFinalizerAllowed) {
             plannedExecutionFinalizer = undefined;
           }
           let plannedExecutionFinalizerApplied = false;
@@ -3672,7 +3675,27 @@ export async function runEmbeddedPiAgent(
             );
             continue;
           }
-          if (plannedExecutionFinalizer?.ok) {
+          if (plannedExecutionFinalizer?.ok && plannedExecutionDeliveryEvidencePresent) {
+            const deliveryFinalPayload = buildPlannedExecutionDeliveryFinalPayload({
+              plannedExecutionFinalizer,
+              deliveryState: plannedExecutionDeliveryState,
+            });
+            if (deliveryFinalPayload) {
+              plannedExecutionFinalizerApplied = true;
+              payloadsWithToolMedia = [deliveryFinalPayload];
+              agentMeta.plannedExecutionFinalizer = {
+                applied: true,
+                packetId: plannedExecutionFinalizer.packetId,
+                jobId: plannedExecutionFinalizer.jobId,
+                recordingPath: plannedExecutionFinalizer.recordingPath,
+                durationSeconds: plannedExecutionFinalizer.probe.durationSeconds,
+                averageFps: plannedExecutionFinalizer.probe.averageFps,
+              };
+              log.info(
+                `planned execution final delivery evidence applied: packet=${plannedExecutionFinalizer.packetId} jobId=${sanitizeForLog(plannedExecutionFinalizer.jobId)} recording=${sanitizeForLog(plannedExecutionFinalizer.recordingPath)}`,
+              );
+            }
+          } else if (plannedExecutionFinalizer?.ok) {
             plannedExecutionFinalizerApplied = true;
             payloadsWithToolMedia = [plannedExecutionFinalizer.payload];
             agentMeta.plannedExecutionFinalizer = {

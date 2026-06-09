@@ -102,11 +102,23 @@ The Godot workflow should express its current video checks as criteria:
 - `effective_fps >= 10` when the host runner reports `effective_fps`
 - request JSON matches the expected project, scene, duration, fps, and capture
   settings
+- for the current Godot auto chess workflow, request JSON also records
+  `planning_stage_seconds = 3` so the recorded 15 seconds is expected to begin
+  with planning stage and continue with combat for the remainder
+- for the current Godot auto chess workflow, request JSON uses
+  `godot_movie = true` with a 1280x720 fixed-FPS movie capture path; the host
+  runner transcodes Godot's raw movie output to `recording.mp4` before
+  validation and delivery
 
 `average_fps` validates the recorded container/frame cadence. `effective_fps`
 is a motion sanity check derived from the host runner's `ffmpeg_mpdecimate`
 probe; it is expected to be much lower than 60 fps for mostly static gameplay
 or UI captures, so it must not use the same threshold as `average_fps`.
+
+Desktop `gdigrab` capture is retained as a fallback capture strategy, but it
+must write frame input/output and duplication evidence into the run log because
+Windows desktop/DWM capture can produce a nominal 60 fps file by duplicating a
+small number of input frames.
 
 ### Artifact Validation Result
 
@@ -163,6 +175,35 @@ type ArtifactDeliveryEvidence = {
 };
 ```
 
+### Delivery Final Evidence
+
+Finalization should emit compact structured evidence that binds the completed
+job to the accepted artifact and the delivery proof. A channel message id is
+useful when it is available, but runtime must not invent one. When the runtime
+has already matched delivery state to the artifact path, it may emit
+`telegram_delivery.ok: true` without repeating the path; the surrounding final
+object still has to name `job_id` and `recording_path`.
+
+Suggested shape:
+
+```ts
+type PlannedArtifactDeliveryFinalEvidence = {
+  status: "done";
+  packet_id?: string;
+  job_id: string;
+  recording_path: string;
+  recording_validated?: boolean;
+  video_probe?: Record<string, number>;
+  telegram_delivery: {
+    ok: true;
+    source?: "delivery_evidence" | "messaging_tool_media" | "payload_media";
+    path?: string;
+    messageId?: string;
+    mediaType?: string;
+  };
+};
+```
+
 ## Phase Contract
 
 Use generic phase names for reusable components while preserving packet-specific
@@ -201,6 +242,8 @@ Recommended modules:
 - `src/agents/planned-execution/delivery.ts`
   - artifact delivery request/evidence helpers
   - pure delivery attempt and evidence classification
+  - final delivery evidence text construction that binds job id, artifact path,
+    and structured delivery evidence
 
 - `src/agents/planned-execution/phases.ts`
   - generic phase names, aliases, and phase decision helpers
@@ -215,6 +258,15 @@ Recommended modules:
 - `src/agents/pi-embedded-runner/run/planned-execution-control.ts`
   - runner-facing retry and continuation policy
   - should stay independent of Godot details where possible
+  - runtime adapter from captured message-tool delivery state to final evidence
+    payloads
+
+- `scripts/lib/planned-execution-lifecycle-evidence.mjs`
+  - harness/E2E-facing lifecycle evidence classification
+  - structured delivery/finalization proof checks that reject text-only success
+    claims
+  - accepts message-id proof or path-bound proof, but only when the proof names
+    the expected job and artifact
 
 Existing `src/agents/planned-execution.ts` can be split gradually instead of in
 one large move.
@@ -390,6 +442,10 @@ evidence:
 - artifact valid
 - delivery evidence present
 - finalization correct
+
+Harness and E2E pass/fail decisions should use structured evidence classifiers,
+not transcript keywords. Delivery/finalization proof must name the concrete job
+and artifact or receipt path where that evidence is available.
 
 ### Step 6: Only Then Consider New Workflows
 

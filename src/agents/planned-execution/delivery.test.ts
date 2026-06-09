@@ -4,6 +4,8 @@ import type { PlannedArtifact } from "./artifacts.js";
 import {
   buildArtifactDeliveryEvidence,
   buildArtifactDeliveryRequest,
+  buildPlannedArtifactDeliveryFinalEvidence,
+  buildPlannedArtifactDeliveryFinalText,
   classifyPlannedArtifactDeliveryEvidence,
   hasPlannedArtifactDeliveryEvidence,
   isArtifactDeliveryEvidenceOk,
@@ -120,6 +122,42 @@ describe("planned artifact delivery helpers", () => {
       ok: false,
       reason: "missing_structured_delivery_evidence",
     });
+  });
+
+  it("builds final delivery evidence bound to job and artifact path", () => {
+    const delivery = classifyPlannedArtifactDeliveryEvidence({
+      artifactPath: recordingArtifact.path,
+      didSendViaMessagingTool: true,
+      messagingToolSentMediaUrls: [recordingArtifact.path],
+    });
+
+    expect(delivery.ok).toBe(true);
+    if (!delivery.ok) {
+      throw new Error("expected delivery evidence");
+    }
+
+    const evidence = buildPlannedArtifactDeliveryFinalEvidence({
+      packetId: "godotRecording",
+      jobId: "qwen_planned_godot_recording_test",
+      artifactPath: recordingArtifact.path,
+      recordingValidated: true,
+      videoProbe: {
+        duration_seconds: 15,
+        average_fps: 60,
+      },
+      delivery,
+    });
+
+    expect(evidence).toMatchObject({
+      status: "done",
+      packet_id: "godotRecording",
+      job_id: "qwen_planned_godot_recording_test",
+      recording_path: recordingArtifact.path,
+      telegram_delivery: {
+        ok: true,
+      },
+    });
+    expect(buildPlannedArtifactDeliveryFinalText(evidence)).toBe(JSON.stringify(evidence));
   });
 
   it("gates delivery attempts on accepted artifacts, missing evidence, and attempt budget", () => {
